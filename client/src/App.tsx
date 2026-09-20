@@ -7,6 +7,7 @@ import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, P
 import {
   activityLogs, annualSavings, costByService, costTrend, fmt, getRecommendation, getResource, monthlySpend, navItems, recommendations, resources, serviceSavings, totalSavings, utilizationBuckets, type Recommendation, type Resource
 } from './lib/mockData';
+import { LandingPage, SignInPage } from './pages/Public';
 
 const iconMap = { LayoutDashboard, Server, Sparkles, BarChart3, Activity: ActivityIcon, FlaskConical, FileText, ListChecks, Settings } as const;
 
@@ -45,6 +46,14 @@ function App() {
   };
 
   const currentPage = location.startsWith('/resources/') ? 'Resources' : location.startsWith('/recommendations/') ? 'Recommendations' : navItems.find((item) => item.path === location)?.label || 'Overview';
+  const isPublic = location === '/' || location === '/signin';
+
+  if (isPublic) {
+    return <Switch>
+      <Route path="/" component={() => <LandingPage navigate={navigate} />} />
+      <Route path="/signin" component={() => <SignInPage navigate={navigate} toast={toast} />} />
+    </Switch>;
+  }
 
   return (
     <div className="app-shell flex min-h-screen">
@@ -54,7 +63,6 @@ function App() {
         <TopBar currentPage={currentPage} searchTerm={searchTerm} setSearchTerm={setSearchTerm} onMenu={() => setSidebarOpen(true)} onSearch={() => setSearchOpen(true)} environmentOpen={environmentOpen} setEnvironmentOpen={setEnvironmentOpen} toast={toast} />
         <main className="min-w-0 flex-1">
           <Switch>
-            <Route path="/" component={() => <OverviewPage navigate={navigate} toast={toast} />} />
             <Route path="/overview" component={() => <OverviewPage navigate={navigate} toast={toast} />} />
             <Route path="/resources" component={() => <ResourcesPage navigate={navigate} toast={toast} />} />
             <Route path="/resources/:id" component={(params) => <ResourceDetailPage id={params.params.id} navigate={navigate} toast={toast} />} />
