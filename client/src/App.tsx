@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
 import {
-  Activity as ActivityIcon, ArrowDownRight, ArrowLeft, ArrowRight, BarChart3, Bell, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Cloud, CloudCog, CloudLightning, Command, Download, FileCheck2, FileText, Filter, FlaskConical, Gauge, Globe2, Info, LayoutDashboard, ListChecks, LockKeyhole, Menu, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Search, Server, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Table2, TrendingDown, TrendingUp, X, Zap
+  Activity as ActivityIcon, ArrowDownRight, ArrowLeft, ArrowRight, BarChart3, Bell, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Cloud, CloudCog, CloudLightning, Command, Download, FileCheck2, FileText, Filter, FlaskConical, Gauge, Globe2, Info, LayoutDashboard, ListChecks, LockKeyhole, LogOut, Menu, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Search, Server, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Table2, TrendingDown, TrendingUp, X, Zap
 } from 'lucide-react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
@@ -57,7 +57,7 @@ function App() {
 
   return (
     <div className="app-shell flex min-h-screen">
-      <Sidebar compact={sidebarCompact} open={sidebarOpen} currentPath={location} onNavigate={() => setSidebarOpen(false)} onToggle={() => setSidebarCompact((value) => !value)} />
+      <Sidebar compact={sidebarCompact} open={sidebarOpen} currentPath={location} onNavigate={() => setSidebarOpen(false)} onToggle={() => setSidebarCompact((value) => !value)} onLogout={() => navigate('/')} />
       {sidebarOpen && <button aria-label="Close navigation" className="fixed inset-0 z-20 bg-slate-950/30 lg:hidden" onClick={() => setSidebarOpen(false)} />}
       <div className="main-content flex min-w-0 flex-1 flex-col">
         <TopBar currentPage={currentPage} searchTerm={searchTerm} setSearchTerm={setSearchTerm} onMenu={() => setSidebarOpen(true)} onSearch={() => setSearchOpen(true)} environmentOpen={environmentOpen} setEnvironmentOpen={setEnvironmentOpen} toast={toast} />
@@ -85,7 +85,7 @@ function App() {
   );
 }
 
-function Sidebar({ compact, open, currentPath, onNavigate, onToggle }: { compact: boolean; open: boolean; currentPath: string; onNavigate: () => void; onToggle: () => void }) {
+function Sidebar({ compact, open, currentPath, onNavigate, onToggle, onLogout }: { compact: boolean; open: boolean; currentPath: string; onNavigate: () => void; onToggle: () => void; onLogout: () => void }) {
   return (
     <aside className={`sidebar flex shrink-0 flex-col ${compact ? 'compact' : ''} ${open ? 'open' : ''}`}>
       <div className="brand flex items-center gap-3 px-5 py-5">
@@ -112,6 +112,7 @@ function Sidebar({ compact, open, currentPath, onNavigate, onToggle }: { compact
       <div className="border-t border-[#253140] p-3">
         <button onClick={onToggle} className="nav-link w-full" aria-label={compact ? 'Expand sidebar' : 'Collapse sidebar'}><span className="flex h-5 w-5 items-center justify-center">{compact ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</span><span className="nav-copy">Collapse navigation</span></button>
         <div className="mt-2 flex items-center gap-2 rounded-lg px-3 py-2 sidebar-foot"><div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#f0a02a] text-[10px] font-bold text-[#261a09]">AN</div><div className="sidebar-foot-copy min-w-0"><div className="truncate text-xs font-semibold text-slate-200">Anika Nair</div><div className="truncate text-[10px] text-slate-500">Platform Admin</div></div><MoreHorizontal className="ml-auto shrink-0 text-slate-600" size={15} /></div>
+        <button onClick={onLogout} className="nav-link mt-1 w-full text-rose-300 hover:bg-rose-500/10 hover:text-rose-200" aria-label="Log out of SmartRightsize"><LogOut size={15} /><span className="nav-copy">Log out</span></button>
       </div>
     </aside>
   );
