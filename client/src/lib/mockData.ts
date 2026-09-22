@@ -117,3 +117,9 @@ export const navItems = [
 
 export const getResource = (id: string) => resources.find((resource) => resource.id === id) || resources[0];
 export const getRecommendation = (id: string) => recommendations.find((recommendation) => recommendation.id === id) || recommendations[0];
+
+export const reportArtifacts = [
+  { title: 'Monthly Optimization Report', date: 'August 2026', status: 'Ready' as const },
+  { title: 'Executive Cost Brief', date: 'July 2026', status: 'Ready' as const },
+  { title: 'Rightsizing Evidence Pack', date: 'July 2026', status: 'Archived' as const },
+];
