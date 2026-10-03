@@ -14,6 +14,8 @@ import { getDataSource } from "./services/dataSource";
 import { isEmailDeliveryConfigured, sendAccountEmail } from "./services/email";
 import { analyzeRecommendation } from "./services/rightsizingEngine";
 import { serializeUser, store, type RightsizingPolicy } from "./store";
+import { initializeDatabase, isDatabaseConfigured } from "./database";
+import { userRepository } from "./userRepository";
 import { resources as seedResources } from "../client/src/lib/mockData";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -36,6 +38,8 @@ async function startServer() {
     }
     if (!process.env.APP_ORIGIN) throw new Error("Production requires APP_ORIGIN to be configured.");
   }
+  await initializeDatabase();
+  await userRepository.migrateLegacyUsers();
 
   const app = express();
   const server = createServer(app);
@@ -62,12 +66,25 @@ async function startServer() {
   app.get("/api/health", (_req, res) => {
     const dataSource = getDataSource();
     const status = dataSource.getStatus();
-    return res.json({ ok: true, service: "smartsize-api", mode: dataSource.kind, awsConnected: status.status === "ready" && dataSource.kind === "aws", dataSource: status });
+    return res.json({
+      ok: true,
+      service: "smartsize-api",
+      mode: dataSource.kind,
+      accountStorage: isDatabaseConfigured() ? "mysql" : "json-development-fallback",
+      awsConnected: status.status === "ready" && dataSource.kind === "aws",
+      dataSource: status,
+    });
   });
   app.get("/api/auth/providers", (_req, res) => res.json({
     google: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
   }));
-  app.get("/api/auth/session", (req, res) => res.json({ user: readSession(req) || null }));
+  app.get("/api/auth/session", async (req, res, next) => {
+    try {
+      return res.json({ user: await readSession(req) || null });
+    } catch (error) {
+      return next(error);
+    }
+  });
 
   app.post("/api/auth/register", authLimiter, async (req, res) => {
     const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
@@ -80,7 +97,7 @@ async function startServer() {
     if (password.length < 8 || Buffer.byteLength(password, "utf8") > 72) return res.status(400).json({ error: "Password must be at least 8 characters and no more than 72 UTF-8 bytes." });
     if (password !== confirmPassword) return res.status(400).json({ error: "Passwords do not match." });
 
-    const existing = store.getUserByEmail(email);
+    const existing = await userRepository.getByEmail(email);
     if (existing) return res.status(409).json({ error: "An account with this email already exists." });
 
     const authMode = getAuthMode();
@@ -91,8 +108,9 @@ async function startServer() {
 
     const requiresVerification = authMode === "production";
     const rawVerificationToken = requiresVerification ? crypto.randomBytes(32).toString("hex") : null;
-    const user = store.saveUser({
-      id: crypto.randomUUID(),
+    const userId = crypto.randomUUID();
+    const user = await userRepository.save({
+      id: userId,
       email,
       name,
       provider: "email",
@@ -103,12 +121,13 @@ async function startServer() {
       verificationTokenExpiresAt: requiresVerification ? new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString() : null,
       createdAt: new Date().toISOString(),
     });
+    if (user.id !== userId) return res.status(409).json({ error: "An account with this email already exists." });
 
     if (requiresVerification && rawVerificationToken) {
       try {
         await sendAccountEmail({ email, name, token: rawVerificationToken, purpose: "verification" });
       } catch (error) {
-        store.deleteUser(user.id);
+        await userRepository.delete(user.id);
         console.error("Email verification delivery failed.", error);
         return res.status(502).json({ error: "Account verification email could not be delivered. No account was created; please try again later." });
       }
@@ -131,14 +150,14 @@ async function startServer() {
     });
   });
 
-  app.post("/api/auth/verify-email", authLimiter, (req, res) => {
+  app.post("/api/auth/verify-email", authLimiter, async (req, res) => {
     const token = typeof req.body?.token === "string" ? req.body.token.trim() : "";
     if (!token) return res.status(400).json({ error: "Verification code is required." });
 
-    const user = store.findUserByVerificationToken(token);
+    const user = await userRepository.findByVerificationToken(token);
     if (!user) return res.status(400).json({ error: "Verification code is invalid or expired." });
 
-    const updatedUser = store.updateUser(user.id, {
+    const updatedUser = await userRepository.update(user.id, {
       emailVerified: true,
       verificationToken: null,
       verificationTokenExpiresAt: null,
@@ -156,7 +175,7 @@ async function startServer() {
     if (!emailPattern.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
     if (!password) return res.status(400).json({ error: "Password is required." });
 
-    const user = store.getUserByEmail(email);
+    const user = await userRepository.getByEmail(email);
     if (!user || !user.passwordHash) {
       store.recordAudit("Failed login attempt", email, "Authentication", "Blocked");
       return res.status(401).json({ error: "Invalid email or password." });
@@ -180,23 +199,30 @@ async function startServer() {
     return res.json({ user: serializeUser(user) });
   });
 
-  app.post("/api/auth/logout", (req, res) => {
-    const user = readSession(req);
-    invalidateSession(req);
-    if (user) store.recordAudit("Logout", user.name, "SmartSize workspace", "Signed out");
+  app.post("/api/auth/logout", async (req, res, next) => {
     clearSession(res);
-    res.status(204).end();
+    try {
+      const user = await readSession(req);
+      if (user) {
+        await invalidateSession(user);
+        store.recordAudit("Logout", user.name, "SmartSize workspace", "Signed out");
+      }
+      return res.status(204).end();
+    } catch (error) {
+      console.error("Session revocation failed during logout.", error);
+      return next(error);
+    }
   });
 
   app.post("/api/auth/request-password-reset", resetLimiter, async (req, res) => {
     const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
     if (!emailPattern.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
 
-    const user = store.getUserByEmail(email);
+    const user = await userRepository.getByEmail(email);
     let developmentToken: string | undefined;
     if (user) {
       const resetToken = crypto.randomBytes(24).toString("hex");
-      store.updateUser(user.id, {
+      await userRepository.update(user.id, {
         resetToken: crypto.createHash("sha256").update(resetToken).digest("hex"),
         resetTokenExpiresAt: new Date(Date.now() + 1000 * 60 * 60).toISOString(),
       });
@@ -204,7 +230,7 @@ async function startServer() {
         const delivery = await sendAccountEmail({ email, name: user.name, token: resetToken, purpose: "password-reset" });
         if (delivery.delivery === "development") developmentToken = delivery.developmentToken;
       } catch (error) {
-        store.updateUser(user.id, { resetToken: null, resetTokenExpiresAt: null });
+        await userRepository.update(user.id, { resetToken: null, resetTokenExpiresAt: null });
         console.error("Password reset email delivery failed.", error);
         return res.status(502).json({ error: "Password reset email could not be delivered. Please try again later." });
       }
@@ -226,10 +252,10 @@ async function startServer() {
     if (password.length < 8 || Buffer.byteLength(password, "utf8") > 72) return res.status(400).json({ error: "Password must be at least 8 characters and no more than 72 UTF-8 bytes." });
     if (password !== confirmPassword) return res.status(400).json({ error: "Passwords do not match." });
 
-    const user = store.findUserByResetToken(token);
+    const user = await userRepository.findByResetToken(token);
     if (!user) return res.status(400).json({ error: "Reset token is invalid or expired." });
 
-    const updatedUser = store.updateUser(user.id, {
+    const updatedUser = await userRepository.update(user.id, {
       passwordHash: await bcrypt.hash(password, 12),
       resetToken: null,
       resetTokenExpiresAt: null,
@@ -247,7 +273,7 @@ async function startServer() {
 
     if (!emailPattern.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
 
-    const user = store.getUserByEmail(email);
+    const user = await userRepository.getByEmail(email);
     if (!user || !user.passwordHash) {
       return res.status(401).json({ error: "This SmartSize account is not available. Please create an account first." });
     }
@@ -316,7 +342,7 @@ async function startServer() {
       });
       if (!profileResponse.ok) return res.status(502).send("Google profile lookup failed.");
       const profile = await profileResponse.json() as { sub: string; email: string; name?: string; picture?: string };
-      const user = store.saveUser({
+      const user = await userRepository.save({
         id: `google-${profile.sub}`,
         email: profile.email,
         name: profile.name || profile.email,

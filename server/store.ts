@@ -154,6 +154,7 @@ export const store = {
   getActivity() { return database.activity; },
   getActions() { return database.actions; },
   getPolicies() { return database.policies; },
+  getUsers() { return database.users; },
   getUserByEmail(email: string) { return database.users.find((user) => user.email.toLowerCase() === email.toLowerCase()); },
   getUserById(id: string) { return database.users.find((user) => user.id === id); },
   findUserByVerificationToken(token: string) {

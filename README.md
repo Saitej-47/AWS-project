@@ -8,7 +8,8 @@ SmartSize is a demo-first prototype for the workflow around AWS rightsizing reco
 
 - **Frontend:** React 19, Vite, TypeScript, Tailwind CSS, Recharts, Lucide
 - **Backend:** Express 4, TypeScript, `tsx`
-- **Demo persistence:** local JSON file at `data/smartsize.json` (ignored by Git)
+- **Account persistence:** MySQL `smartsize_users` table when `DATABASE_URL` is configured; JSON fallback for local development
+- **Demo workflow persistence:** local JSON file at `data/smartsize.json` (ignored by Git)
 - **Recommendation analysis:** deterministic TypeScript service in `server/services/rightsizingEngine.ts`
 
 The project already used a React/Express architecture. This implementation extends it instead of introducing a separate FastAPI/MySQL deployment that would require additional services and setup. The JSON store is suitable for a single-user local demo only; it is not a production database.
@@ -41,7 +42,7 @@ The current dependency tree has an upstream peer-dependency mismatch: `@builder.
 npm ci --legacy-peer-deps
 ```
 
-Configure the local environment by copying `.env.example` to `.env` if you need to change defaults. No AWS credentials or database are needed for demo mode.
+Configure the local environment by copying `.env.example` to `.env`. To persist registered accounts in MySQL, set `DATABASE_URL` to a URL such as `mysql://user:password@localhost:3306/smartsize`; the API checks the connection and creates the account table at startup. Existing local JSON account records are copied into MySQL at startup without overwriting any accounts already there. Keep the real connection string in `.env` and never commit it. When `DATABASE_URL` is absent in development, accounts use the local JSON fallback. Production startup requires a configured MySQL database.
 
 Start the frontend and API together:
 
@@ -74,7 +75,7 @@ See `.env.example`. `AWS_MODE=demo` is the supported demo configuration. `AWS_MO
 
 Google OAuth is disabled in the sign-in UI unless both OAuth credentials are configured. Production email verification and password-reset delivery require `EMAIL_PROVIDER=sendgrid`, `EMAIL_FROM`, and `SENDGRID_API_KEY`. In development without email delivery, password reset returns a clearly marked development-only token; production never returns reset or verification tokens.
 
-Production startup requires a unique `SESSION_SECRET` (at least 32 characters) and an `APP_ORIGIN`. Authentication endpoints are rate-limited, cookies are HTTP-only and secure in production, logout/password reset invalidate prior sessions, and the API applies security headers and an explicit credentialed CORS allowlist. Keep real secrets in `.env`, never in frontend source or committed files.
+Production startup requires a unique `SESSION_SECRET` (at least 32 characters), an `APP_ORIGIN`, and `DATABASE_URL`. The MySQL account table is created if missing. Registered users, password hashes, verification/reset token hashes, and session versions are stored in MySQL when configured; password reset and logout invalidate prior sessions. Authentication endpoints are rate-limited, cookies are HTTP-only and secure in production, and the API applies security headers and an explicit credentialed CORS allowlist. Keep real secrets in `.env`, never in frontend source or committed files.
 
 ## AWS and IAM
 
@@ -82,7 +83,7 @@ There is currently no AWS SDK integration, AWS account connection, or IAM role a
 
 ## Persistence and data reset
 
-Workspace account/workflow state is written to `data/smartsize.json`; the directory is ignored by Git. Recommendation/resource fixtures are source-controlled synthetic data. Stop the API before manually removing or backing up the JSON file. If no state file exists, the API initializes demo defaults.
+Demo workflow state (recommendation decisions, simulations, reports, actions, policies, and activity) is written to `data/smartsize.json`; the directory is ignored by Git. Registered account records use MySQL when `DATABASE_URL` is configured and fall back to the JSON file only in development without a database URL. Recommendation/resource fixtures are source-controlled synthetic data. Stop the API before manually removing or backing up the JSON workflow file. If no state file exists, the API initializes demo defaults.
 
 ## Validation
 
@@ -96,10 +97,10 @@ npm run build
 
 ## Limitations and next steps
 
-- No FastAPI/Python backend, MySQL schema/migrations, or multi-user persistence.
+- No FastAPI/Python backend or multi-tenant workspace isolation. MySQL currently stores account/authentication records; demo workflow records remain in the local JSON store.
 - No real AWS discovery, metrics, recommendation ingestion, pricing, sync, execution, or post-change verification.
 - No live savings can be claimed; the demo fixtures and their estimates are synthetic.
 - Password authentication exists for registered users, while the one-click demo session is intended for local demonstration.
-- Authentication data and workspace actions still use the local JSON store. The production-ready MySQL repository, per-workspace data isolation, and MySQL-backed user/session storage are not implemented yet; do not deploy this JSON-backed store for multiple users.
+- Workflow actions, recommendations, simulations, reports, policies, and audit events still use the local JSON store and are not isolated by workspace. Do not deploy the full application as a multi-user service until those records are migrated to tenant-scoped database tables.
 - JSON persistence is not safe for concurrent production use and has no database backup/migration strategy.
 - Add a real AWS read-only integration and MySQL persistence before any live account use. Add separately permissioned, explicitly approved execution only after a staged safety design.

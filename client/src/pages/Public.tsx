@@ -4,6 +4,7 @@ import { api, type SessionUser } from '../lib/api';
 
 type PublicProps = { navigate: (path: string) => void };
 type SignInProps = PublicProps & { toast: (title: string, body: string, tone?: 'success' | 'info') => void };
+type AuthenticatedSignInProps = SignInProps & { onAuthenticated: (user: SessionUser) => void };
 type LandingProps = PublicProps & { toast: SignInProps['toast']; onEnterDemo: () => Promise<void> };
 
 type VerificationUser = Pick<SessionUser, 'name' | 'email'> | null;
@@ -177,7 +178,7 @@ function StoryCard({ number, title, body, icon, accent }: { number: string; titl
   );
 }
 
-export function SignInPage({ navigate, toast }: SignInProps) {
+export function SignInPage({ navigate, toast, onAuthenticated }: AuthenticatedSignInProps) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -199,6 +200,7 @@ export function SignInPage({ navigate, toast }: SignInProps) {
     setLoading(true);
     try {
       const { user } = await api.login({ email, password });
+      onAuthenticated(user);
       toast('Welcome back', `You are signed in to SmartSize, ${user.name}.`, 'success');
       navigate('/overview');
     } catch (error) {

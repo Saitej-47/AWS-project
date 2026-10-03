@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import type { User } from "./store";
-import { store } from "./store";
+import { userRepository } from "./userRepository";
 
 const sessionCookie = "smartsize_session";
 const stateCookie = "smartsize_oauth_state";
@@ -39,7 +39,7 @@ function readCookies(request: Request) {
   }));
 }
 
-export function readSession(request: Request): User | undefined {
+export async function readSession(request: Request): Promise<User | undefined> {
   const token = readCookies(request)[sessionCookie];
   if (!token) return undefined;
   const [payload, signature] = token.split(".");
@@ -48,30 +48,39 @@ export function readSession(request: Request): User | undefined {
     return undefined;
   }
 
+  let data: { user: User; sessionVersion: number; exp: number };
   try {
-    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { user: User; sessionVersion: number; exp: number };
-    if (data.exp <= Date.now()) return undefined;
-    const currentUser = store.getUserById(data.user.id);
-    if (!currentUser || (currentUser.sessionVersion ?? 0) !== data.sessionVersion) return undefined;
-    return { ...currentUser, passwordHash: undefined, verificationToken: undefined, resetToken: undefined, verificationTokenExpiresAt: undefined, resetTokenExpiresAt: undefined };
+    data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as typeof data;
   } catch {
     return undefined;
   }
+  if (!data.user?.id || data.exp <= Date.now()) return undefined;
+  const currentUser = await userRepository.getById(data.user.id);
+  if (!currentUser || (currentUser.sessionVersion ?? 0) !== data.sessionVersion) return undefined;
+  return { ...currentUser, passwordHash: undefined, verificationToken: undefined, resetToken: undefined, verificationTokenExpiresAt: undefined, resetTokenExpiresAt: undefined };
 }
 
-export function requireSession(request: Request, response: Response, next: NextFunction) {
-  const user = readSession(request);
-  if (!user) return response.status(401).json({ error: "Authentication required" });
-  request.user = user;
-  return next();
+export async function requireSession(request: Request, response: Response, next: NextFunction) {
+  try {
+    const user = await readSession(request);
+    if (!user) return response.status(401).json({ error: "Authentication required" });
+    request.user = user;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
 }
 
-export function requireVerifiedSession(request: Request, response: Response, next: NextFunction) {
-  const user = readSession(request);
-  if (!user) return response.status(401).json({ error: "Authentication required" });
-  if (!user.emailVerified) return response.status(403).json({ error: "Email verification required", verificationRequired: true });
-  request.user = user;
-  return next();
+export async function requireVerifiedSession(request: Request, response: Response, next: NextFunction) {
+  try {
+    const user = await readSession(request);
+    if (!user) return response.status(401).json({ error: "Authentication required" });
+    if (!user.emailVerified) return response.status(403).json({ error: "Email verification required", verificationRequired: true });
+    request.user = user;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
 }
 
 export function setSession(response: Response, user: User) {
@@ -88,9 +97,8 @@ export function clearSession(response: Response) {
   response.clearCookie(sessionCookie, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/" });
 }
 
-export function invalidateSession(request: Request) {
-  const user = readSession(request);
-  if (user) store.updateUser(user.id, { sessionVersion: (user.sessionVersion ?? 0) + 1 });
+export async function invalidateSession(user: User) {
+  await userRepository.update(user.id, { sessionVersion: (user.sessionVersion ?? 0) + 1 });
 }
 
 export function createOAuthState(response: Response) {
@@ -106,7 +114,7 @@ export function verifyOAuthState(request: Request, state: string) {
 
 export async function createDemoUser(email = "demo@smartsize.local") {
   const { randomUUID } = await import("node:crypto");
-  return store.saveUser({
+  return userRepository.save({
     id: randomUUID(),
     email,
     name: "SmartSize Demo Admin",

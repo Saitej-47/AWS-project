@@ -138,7 +138,7 @@ function App() {
   if (isPublic) {
     return <Switch>
       <Route path="/" component={() => <LandingPage navigate={navigate} toast={toast} onEnterDemo={async () => { const { user } = await api.demoSession(); setSessionUser(user); navigate('/overview'); }} />} />
-      <Route path="/signin" component={() => <SignInPage navigate={navigate} toast={toast} />} />
+      <Route path="/signin" component={() => <SignInPage navigate={navigate} toast={toast} onAuthenticated={setSessionUser} />} />
       <Route path="/register" component={() => <RegisterPage navigate={navigate} toast={toast} />} />
       <Route path="/verify-email" component={() => <VerificationRequiredPage user={sessionUser} navigate={navigate} toast={toast} />} />
       <Route path="/forgot-password" component={() => <PasswordResetRequestPage navigate={navigate} toast={toast} />} />
@@ -153,7 +153,15 @@ function App() {
 
   return (
     <div className="app-shell flex min-h-screen">
-      <Sidebar user={sessionUser} compact={sidebarCompact} open={sidebarOpen} currentPath={location} onNavigate={() => setSidebarOpen(false)} onToggle={() => setSidebarCompact((value) => !value)} onLogout={async () => { await api.logout().catch(() => undefined); navigate('/'); }} onAdvisor={() => setAdvisorOpen(true)} />
+      <Sidebar user={sessionUser} compact={sidebarCompact} open={sidebarOpen} currentPath={location} onNavigate={() => setSidebarOpen(false)} onToggle={() => setSidebarCompact((value) => !value)} onLogout={async () => {
+        setSessionUser(null);
+        navigate('/signin');
+        try {
+          await api.logout();
+        } catch (error) {
+          toast('Signed out locally', error instanceof Error ? `The browser session ended, but server-side logout could not be confirmed: ${error.message}` : 'The browser session ended, but server-side logout could not be confirmed.');
+        }
+      }} onAdvisor={() => setAdvisorOpen(true)} />
       {sidebarOpen && <button aria-label="Close navigation" className="fixed inset-0 z-20 bg-slate-950/30 lg:hidden" onClick={() => setSidebarOpen(false)} />}
       <div className="main-content flex min-w-0 flex-1 flex-col">
         <TopBar user={sessionUser} currentPage={currentPage} searchTerm={searchTerm} setSearchTerm={setSearchTerm} onMenu={() => setSidebarOpen(true)} onSearch={() => setSearchOpen(true)} environmentOpen={environmentOpen} setEnvironmentOpen={setEnvironmentOpen} toast={toast} />
