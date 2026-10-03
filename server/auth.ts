@@ -5,9 +5,13 @@ import { store } from "./store";
 
 const sessionCookie = "smartsize_session";
 const stateCookie = "smartsize_oauth_state";
-const sessionSecret = process.env.SESSION_SECRET || "smartsize-local-development-secret";
+let ephemeralDevelopmentSecret: string | undefined;
 
 function sign(value: string) {
+  const sessionSecret = process.env.SESSION_SECRET ?? (process.env.NODE_ENV === "production"
+    ? undefined
+    : (ephemeralDevelopmentSecret ??= crypto.randomBytes(32).toString("hex")));
+  if (!sessionSecret) throw new Error("SESSION_SECRET must be configured in production.");
   return crypto.createHmac("sha256", sessionSecret).update(value).digest("base64url");
 }
 
@@ -24,7 +28,7 @@ function toSessionUser(user: User) {
 }
 
 function createToken(user: User) {
-  const payload = Buffer.from(JSON.stringify({ user: toSessionUser(user), exp: Date.now() + 1000 * 60 * 60 * 24 * 7 })).toString("base64url");
+  const payload = Buffer.from(JSON.stringify({ user: toSessionUser(user), sessionVersion: user.sessionVersion ?? 0, exp: Date.now() + 1000 * 60 * 60 * 24 * 7 })).toString("base64url");
   return `${payload}.${sign(payload)}`;
 }
 
@@ -45,8 +49,11 @@ export function readSession(request: Request): User | undefined {
   }
 
   try {
-    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { user: User; exp: number };
-    return data.exp > Date.now() ? { ...data.user, passwordHash: undefined, verificationToken: undefined, resetToken: undefined, verificationTokenExpiresAt: undefined, resetTokenExpiresAt: undefined } : undefined;
+    const data = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as { user: User; sessionVersion: number; exp: number };
+    if (data.exp <= Date.now()) return undefined;
+    const currentUser = store.getUserById(data.user.id);
+    if (!currentUser || (currentUser.sessionVersion ?? 0) !== data.sessionVersion) return undefined;
+    return { ...currentUser, passwordHash: undefined, verificationToken: undefined, resetToken: undefined, verificationTokenExpiresAt: undefined, resetTokenExpiresAt: undefined };
   } catch {
     return undefined;
   }
@@ -79,6 +86,11 @@ export function setSession(response: Response, user: User) {
 
 export function clearSession(response: Response) {
   response.clearCookie(sessionCookie, { httpOnly: true, sameSite: "lax", secure: process.env.NODE_ENV === "production", path: "/" });
+}
+
+export function invalidateSession(request: Request) {
+  const user = readSession(request);
+  if (user) store.updateUser(user.id, { sessionVersion: (user.sessionVersion ?? 0) + 1 });
 }
 
 export function createOAuthState(response: Response) {

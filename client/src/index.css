@@ -162,7 +162,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .breadcrumb-link:hover { color: #ff9900; }
 .section-rule { border-top: 1px solid #e9edf2; }
 .insight-strip { background: linear-gradient(105deg, #152231 0%, #1d2d3d 60%, #203749 100%); color: white; border-radius: 14px; position: relative; overflow: hidden; }
-.insight-strip::after { content: ''; position: absolute; width: 240px; height: 240px; top: -140px; right: -20px; border-radius: 50%; border: 28px solid rgba(255,153,0,.14); }
+.insight-strip::after { content: ''; position: absolute; width: 240px; height: 240px; top: -140px; right: -20px; border-radius: 50%; border: 28px solid rgba(255,153,0,.14); pointer-events: none; }
 .donut { transform: rotate(-90deg); }
 .heat-cell { min-height: 35px; border-radius: 5px; transition: transform .16s ease, filter .16s ease; }
 .heat-cell:hover { transform: scale(1.04); filter: brightness(.98); }

@@ -74,19 +74,19 @@ export const recommendations: Recommendation[] = [
 ];
 
 export const costTrend = [
-  { day: '01 Aug', current: 244000, optimized: 199500 }, { day: '04 Aug', current: 247800, optimized: 201200 }, { day: '07 Aug', current: 251600, optimized: 204100 }, { day: '10 Aug', current: 249400, optimized: 202700 }, { day: '13 Aug', current: 253200, optimized: 206900 }, { day: '16 Aug', current: 255900, optimized: 208600 }, { day: '19 Aug', current: 258100, optimized: 210700 }, { day: '22 Aug', current: 256400, optimized: 209900 }, { day: '25 Aug', current: 252700, optimized: 207100 }, { day: '28 Aug', current: 248600, optimized: 201450 },
+  { day: '01 Aug', current: 348000, optimized: 278430 }, { day: '04 Aug', current: 352800, optimized: 283230 }, { day: '07 Aug', current: 356600, optimized: 287030 }, { day: '10 Aug', current: 354400, optimized: 284830 }, { day: '13 Aug', current: 358200, optimized: 288630 }, { day: '16 Aug', current: 360900, optimized: 291330 }, { day: '19 Aug', current: 363100, optimized: 293530 }, { day: '22 Aug', current: 361400, optimized: 291830 }, { day: '25 Aug', current: 358700, optimized: 289130 }, { day: '28 Aug', current: 363600, optimized: 294030 },
 ];
 
 export const serviceSavings = [
-  { name: 'EC2', value: 31200, color: '#ff9900' }, { name: 'EBS', value: 7400, color: '#5b7cfa' }, { name: 'RDS', value: 5850, color: '#35a785' }, { name: 'Lambda', value: 2700, color: '#9b7cf4' },
+  { name: 'EC2', value: 47440, color: '#ff9900' }, { name: 'EBS', value: 3100, color: '#5b7cfa' }, { name: 'RDS', value: 17720, color: '#35a785' }, { name: 'Lambda', value: 1310, color: '#9b7cf4' },
 ];
 
 export const costByService = [
-  { name: 'EC2', current: 168400, optimized: 132800 }, { name: 'RDS', current: 72100, optimized: 54800 }, { name: 'EBS', current: 28900, optimized: 21500 }, { name: 'Lambda', current: 15200, optimized: 12300 },
+  { name: 'EC2', current: 280800, optimized: 233360 }, { name: 'RDS', current: 59300, optimized: 41580 }, { name: 'EBS', current: 17600, optimized: 14500 }, { name: 'Lambda', current: 5900, optimized: 4590 },
 ];
 
 export const utilizationBuckets = [
-  { label: '0–20%', count: 43, color: '#ffead2' }, { label: '20–40%', count: 31, color: '#ffd39b' }, { label: '40–60%', count: 29, color: '#ffb45b' }, { label: '60–80%', count: 18, color: '#ff9900' }, { label: '80%+', count: 6, color: '#df6a32' },
+  { label: '0–20%', count: 9, color: '#ffead2' }, { label: '20–40%', count: 9, color: '#ffd39b' }, { label: '40–60%', count: 4, color: '#ffb45b' }, { label: '60–80%', count: 2, color: '#ff9900' }, { label: '80%+', count: 0, color: '#df6a32' },
 ];
 
 export const activityLogs = [
@@ -100,18 +100,22 @@ export const activityLogs = [
 ];
 
 export const fmt = (value: number) => `₹${value.toLocaleString('en-IN')}`;
-export const monthlySpend = 248600;
-export const totalSavings = 47150;
-export const annualSavings = 565800;
+export const monthlySpend = 363600;
+export const totalSavings = 69570;
+export const annualSavings = 834840;
 export const navItems = [
   { label: 'Overview', path: '/overview', icon: 'LayoutDashboard' },
   { label: 'Resources', path: '/resources', icon: 'Server' },
-  { label: 'Recommendations', path: '/recommendations', icon: 'Sparkles', count: 43 },
+  { label: 'Recommendations', path: '/recommendations', icon: 'Sparkles', count: recommendations.length },
   { label: 'Cost Analysis', path: '/cost-analysis', icon: 'BarChart3' },
   { label: 'Utilization', path: '/utilization', icon: 'Activity' },
   { label: 'What-If Simulator', path: '/simulator', icon: 'FlaskConical' },
+  { label: 'Action Center', path: '/actions', icon: 'ListChecks' },
+  { label: 'Savings', path: '/savings', icon: 'TrendingUp' },
+  { label: 'Policies', path: '/policies', icon: 'ShieldCheck' },
   { label: 'Reports', path: '/reports', icon: 'FileText' },
   { label: 'Activity / Audit Log', path: '/activity', icon: 'ListChecks' },
+  { label: 'AWS Connection', path: '/aws', icon: 'Cloud' },
   { label: 'Settings', path: '/settings', icon: 'Settings' },
 ] as const;
 

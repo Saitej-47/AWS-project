@@ -16,6 +16,7 @@ export type User = {
   verificationTokenExpiresAt?: string | null;
   resetToken?: string | null;
   resetTokenExpiresAt?: string | null;
+  sessionVersion?: number;
   createdAt: string;
 };
 
@@ -36,6 +37,22 @@ export type Simulation = {
   createdBy: string;
 };
 
+export type OptimizationReport = {
+  id: string;
+  name: string;
+  createdAt: string;
+  createdBy: string;
+  summary: {
+    totalResources: number;
+    totalRecommendations: number;
+    openRecommendations: number;
+    currentMonthlySpend: number;
+    potentialMonthlySavings: number;
+    projectedAnnualSavings: number;
+    verifiedSavings: number;
+  };
+};
+
 export type Activity = {
   id: string;
   time: string;
@@ -43,28 +60,68 @@ export type Activity = {
   resource: string;
   user: string;
   status: string;
+  details?: string;
+};
+
+export type RightsizingAction = {
+  id: string;
+  recommendationId: string;
+  actionType: "Rightsize";
+  oldConfiguration: string;
+  newConfiguration: string;
+  requestedBy: string;
+  approvedBy: string;
+  status: "Approved" | "Scheduled" | "Simulated";
+  createdAt: string;
+  scheduledAt?: string;
+  executedAt?: string;
+};
+
+export type RightsizingPolicy = {
+  id: string;
+  environment: "Production" | "Staging" | "Development";
+  autoExecution: boolean;
+  approvalRequired: boolean;
+  maximumRisk: "Low" | "Medium" | "High";
 };
 
 type Database = {
   recommendations: StoredRecommendation[];
   simulations: Simulation[];
+  reports: OptimizationReport[];
   activity: Activity[];
+  actions: RightsizingAction[];
+  policies: RightsizingPolicy[];
   users: User[];
 };
 
-const dataDirectory = path.resolve(process.cwd(), "data");
+const dataDirectory = path.resolve(process.env.DATA_DIRECTORY || process.cwd(), "data");
 const dataPath = path.join(dataDirectory, "smartsize.json");
 
 function initialDatabase(): Database {
-  return { recommendations: seedRecommendations.map((recommendation) => ({ ...recommendation })), simulations: [], activity: [], users: [] };
+  return {
+    recommendations: seedRecommendations.map((recommendation) => ({ ...recommendation })),
+    simulations: [],
+    reports: [],
+    activity: [],
+    actions: [],
+    policies: [
+      { id: "production", environment: "Production", autoExecution: false, approvalRequired: true, maximumRisk: "Low" },
+      { id: "staging", environment: "Staging", autoExecution: false, approvalRequired: true, maximumRisk: "Medium" },
+      { id: "development", environment: "Development", autoExecution: false, approvalRequired: false, maximumRisk: "Medium" },
+    ],
+    users: [],
+  };
 }
 
 function readDatabase(): Database {
   if (!fs.existsSync(dataPath)) return initialDatabase();
   try {
-    return { ...initialDatabase(), ...JSON.parse(fs.readFileSync(dataPath, "utf8")) } as Database;
-  } catch {
-    return initialDatabase();
+    const parsed = JSON.parse(fs.readFileSync(dataPath, "utf8")) as Partial<Database>;
+    return { ...initialDatabase(), ...parsed };
+  } catch (error) {
+    console.error(`Unable to read workspace data at ${dataPath}`, error);
+    throw error;
   }
 }
 
@@ -93,22 +150,34 @@ export const store = {
   getResources() { return seedResources; },
   getRecommendations() { return database.recommendations; },
   getSimulations() { return database.simulations; },
+  getReports() { return database.reports; },
   getActivity() { return database.activity; },
+  getActions() { return database.actions; },
+  getPolicies() { return database.policies; },
   getUserByEmail(email: string) { return database.users.find((user) => user.email.toLowerCase() === email.toLowerCase()); },
   getUserById(id: string) { return database.users.find((user) => user.id === id); },
   findUserByVerificationToken(token: string) {
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
     return database.users.find((user) => {
-      if (!user.verificationToken || user.verificationToken !== token) return false;
+      if (!user.verificationToken || user.verificationToken !== tokenHash) return false;
       if (!user.verificationTokenExpiresAt) return true;
       return new Date(user.verificationTokenExpiresAt).getTime() > Date.now();
     });
   },
   findUserByResetToken(token: string) {
+    const tokenHash = crypto.createHash("sha256").update(token).digest("hex");
     return database.users.find((user) => {
-      if (!user.resetToken || user.resetToken !== token) return false;
+      if (!user.resetToken || user.resetToken !== tokenHash) return false;
       if (!user.resetTokenExpiresAt) return true;
       return new Date(user.resetTokenExpiresAt).getTime() > Date.now();
     });
+  },
+  deleteUser(userId: string) {
+    const index = database.users.findIndex((user) => user.id === userId);
+    if (index === -1) return false;
+    database.users.splice(index, 1);
+    writeDatabase();
+    return true;
   },
   saveUser(user: User) {
     const existing = store.getUserByEmail(user.email);
@@ -124,7 +193,7 @@ export const store = {
     writeDatabase();
     return database.users[index];
   },
-  recordAudit(action: string, user: string, resource: string, status: string) {
+  recordAudit(action: string, user: string, resource: string, status: string, details?: string) {
     database.activity.unshift({
       id: crypto.randomUUID(),
       time: new Date().toISOString(),
@@ -132,6 +201,7 @@ export const store = {
       resource,
       user,
       status,
+      details,
     });
     writeDatabase();
   },
@@ -143,7 +213,26 @@ export const store = {
     recommendation.approvedBy = status === "Approved" ? user.email : undefined;
     recommendation.approvedAt = status === "Approved" ? recommendation.updatedAt : undefined;
     recommendation.decisionNote = decisionNote;
-    store.recordAudit(status === "Approved" ? "Approved recommendation" : "Rejected recommendation", user.name, recommendation.resourceName, status);
+    if (status === "Approved") {
+      database.actions.unshift({
+        id: crypto.randomUUID(),
+        recommendationId: recommendation.id,
+        actionType: "Rightsize",
+        oldConfiguration: recommendation.current,
+        newConfiguration: recommendation.recommended,
+        requestedBy: user.email,
+        approvedBy: user.email,
+        status: "Approved",
+        createdAt: recommendation.updatedAt,
+      });
+    }
+    store.recordAudit(
+      status === "Approved" ? "Approved recommendation" : "Rejected recommendation",
+      user.name,
+      recommendation.resourceName,
+      status,
+      decisionNote,
+    );
     writeDatabase();
     return recommendation;
   },
@@ -153,5 +242,40 @@ export const store = {
     store.recordAudit("Created simulation", user.name, `${simulation.recommendationIds.length} recommendations`, "Simulated");
     writeDatabase();
     return simulation;
+  },
+  createReport(input: Omit<OptimizationReport, "id" | "createdAt">, user: User) {
+    const report: OptimizationReport = { ...input, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
+    database.reports.unshift(report);
+    store.recordAudit("Generated optimization report", user.name, report.name, "Generated");
+    writeDatabase();
+    return report;
+  },
+  scheduleAction(actionId: string, scheduledAt: string, user: User) {
+    const action = database.actions.find((item) => item.id === actionId);
+    if (!action || action.status !== "Approved") return undefined;
+    action.status = "Scheduled";
+    action.scheduledAt = scheduledAt;
+    const recommendation = database.recommendations.find((item) => item.id === action.recommendationId);
+    store.recordAudit("Scheduled rightsizing action", user.name, recommendation?.resourceName ?? action.recommendationId, "Scheduled", scheduledAt);
+    writeDatabase();
+    return action;
+  },
+  simulateAction(actionId: string, user: User) {
+    const action = database.actions.find((item) => item.id === actionId);
+    if (!action || action.status !== "Scheduled") return undefined;
+    action.status = "Simulated";
+    action.executedAt = new Date().toISOString();
+    const recommendation = database.recommendations.find((item) => item.id === action.recommendationId);
+    store.recordAudit("Simulated scheduled rightsizing action", user.name, recommendation?.resourceName ?? action.recommendationId, "Simulated", "No AWS resource was modified.");
+    writeDatabase();
+    return action;
+  },
+  updatePolicy(id: string, updates: Partial<Omit<RightsizingPolicy, "id" | "environment">>, user: User) {
+    const policy = database.policies.find((item) => item.id === id);
+    if (!policy) return undefined;
+    Object.assign(policy, updates);
+    store.recordAudit("Updated rightsizing policy", user.name, policy.environment, "Updated", JSON.stringify(updates));
+    writeDatabase();
+    return policy;
   },
 };

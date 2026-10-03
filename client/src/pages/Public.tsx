@@ -1,13 +1,21 @@
-﻿import { type FormEvent, type ReactNode, useState } from 'react';
+import { type FormEvent, type ReactNode, useEffect, useState } from 'react';
 import { ArrowRight, Check, ChevronRight, CloudCog, Eye, EyeOff, LockKeyhole, Menu, ShieldCheck, Sparkles, TrendingDown, Zap } from 'lucide-react';
 import { api, type SessionUser } from '../lib/api';
 
 type PublicProps = { navigate: (path: string) => void };
 type SignInProps = PublicProps & { toast: (title: string, body: string, tone?: 'success' | 'info') => void };
+type LandingProps = PublicProps & { toast: SignInProps['toast']; onEnterDemo: () => Promise<void> };
 
 type VerificationUser = Pick<SessionUser, 'name' | 'email'> | null;
 
-export function LandingPage({ navigate }: PublicProps) {
+export function LandingPage({ navigate, toast, onEnterDemo }: LandingProps) {
+  const enterDemo = async () => {
+    try {
+      await onEnterDemo();
+    } catch (error) {
+      toast('Demo workspace unavailable', error instanceof Error ? error.message : 'The demo session could not be started.');
+    }
+  };
   return (
     <div className="landing-shell">
       <a className="skip-link" href="#main-content">Skip to content</a>
@@ -34,9 +42,9 @@ export function LandingPage({ navigate }: PublicProps) {
           <div className="hero-copy">
             <div className="landing-kicker"><span className="pulse-dot" /> Cloud cost intelligence for teams that move with intent</div>
             <h1>Pay for the capacity your cloud <em>actually</em> needs.</h1>
-            <p className="hero-lede">SmartSize turns AWS utilization signals into decisions your team can explain, simulate, and approve with confidence.</p>
+            <p className="hero-lede">SmartSize adds explainable analysis, policy, and human approval around AWS rightsizing recommendations.</p>
             <div className="hero-actions">
-              <button className="landing-cta" onClick={() => navigate('/demo')}>Explore the demo <ArrowRight size={16} /></button>
+              <button className="landing-cta" onClick={() => void enterDemo()}>Explore the demo <ArrowRight size={16} /></button>
               <button className="landing-quiet" onClick={() => navigate('/signin')}>Sign in to workspace <ChevronRight size={15} /></button>
             </div>
             <div className="hero-proof">
@@ -52,7 +60,7 @@ export function LandingPage({ navigate }: PublicProps) {
                 <span className="chrome-dot red" />
                 <span className="chrome-dot yellow" />
                 <span className="chrome-dot green" />
-                <span className="window-address">smart<span>size</span> / overview</span>
+                <span className="window-address">right<span>scale</span> / overview</span>
                 <span className="window-mode">DEMO</span>
               </div>
               <div className="window-body">
@@ -69,9 +77,9 @@ export function LandingPage({ navigate }: PublicProps) {
                   <div className="window-eyebrow">CLOUD OPTIMIZATION OVERVIEW</div>
                   <div className="window-title">Clarity, before complexity.</div>
                   <div className="window-kpis">
-                    <div><small>Potential savings</small><strong>₹47,150</strong><span className="positive">↑ 18.4%</span></div>
-                    <div><small>Resources analyzed</small><strong>127</strong><span>Across 4 services</span></div>
-                    <div><small>Open opportunities</small><strong>43</strong><span>10 need review</span></div>
+                    <div><small>Potential savings</small><strong>₹69,570</strong><span>Monthly demo estimate</span></div>
+                    <div><small>Resources analyzed</small><strong>24</strong><span>Across 4 services</span></div>
+                    <div><small>Recommendations</small><strong>10</strong><span>9 awaiting decision</span></div>
                   </div>
                 </div>
               </div>
@@ -90,7 +98,7 @@ export function LandingPage({ navigate }: PublicProps) {
           <div className="section-intro">
             <div className="landing-kicker muted"><span className="tiny-rule" /> The intelligent layer between signal and action</div>
             <h2>Less noise. <em>Better decisions.</em></h2>
-            <p>SmartSize translates AWS utilization and spend signals into a decision-ready story your team can trust.</p>
+            <p>SmartSize translates utilization and cost evidence into a decision-ready review process.</p>
           </div>
           <div className="story-grid">
             <StoryCard number="01" title="See clearly" body="A calm, high-signal view of infrastructure, utilization, and cost without spreadsheet archaeology." icon={<Eye size={19} />} />
@@ -106,9 +114,9 @@ export function LandingPage({ navigate }: PublicProps) {
             <div className="proof-byline"><span className="proof-line" /> <span>Built for the people who own infrastructure outcomes</span></div>
           </div>
           <div className="proof-stats">
-            <div><strong>127</strong><span>resources in view</span></div>
-            <div><strong>₹5.6L</strong><span>annual opportunity</span></div>
-            <div><strong>89%</strong><span>weighted confidence</span></div>
+            <div><strong>24</strong><span>synthetic resources</span></div>
+            <div><strong>₹8.35L</strong><span>annualized demo opportunity</span></div>
+            <div><strong>85%</strong><span>average demo confidence</span></div>
           </div>
         </section>
 
@@ -116,7 +124,7 @@ export function LandingPage({ navigate }: PublicProps) {
           <div className="security-copy">
             <div className="landing-kicker muted"><LockKeyhole size={14} /> Trust is part of the interface</div>
             <h2>Confidence, by design.</h2>
-            <p>SmartSize is designed around verified access, clear audit trails, and a deliberate separation between demo and live AWS data.</p>
+            <p>SmartSize keeps a clear audit trail and separates synthetic demo data from live AWS connectivity.</p>
             <div className="security-list">
               <div><Check size={15} /> Demo-first, while clearly distinguishing simulated and live environment states</div>
               <div><Check size={15} /> Least-privilege access posture for future AWS integrations</div>
@@ -138,8 +146,8 @@ export function LandingPage({ navigate }: PublicProps) {
           <div className="final-ornament" />
           <div className="landing-kicker"><span className="pulse-dot" /> The next conversation starts here</div>
           <h2>Make every cloud decision<br /><em>worth explaining.</em></h2>
-          <p>Explore the SmartSize experience with a realistic demo workspace — no AWS credentials required.</p>
-          <button className="landing-cta" onClick={() => navigate('/demo')}>Enter the workspace <ArrowRight size={16} /></button>
+          <p>Explore a realistic synthetic dataset and demonstrate the controlled workflow — no AWS credentials required.</p>
+          <button className="landing-cta" onClick={() => void enterDemo()}>Enter the workspace <ArrowRight size={16} /></button>
         </section>
       </main>
 
@@ -174,6 +182,17 @@ export function SignInPage({ navigate, toast }: SignInProps) {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [googleAvailable, setGoogleAvailable] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    void api.authProviders().then(({ google }) => {
+      if (active) setGoogleAvailable(google);
+    }).catch(() => {
+      if (active) setGoogleAvailable(false);
+    });
+    return () => { active = false; };
+  }, []);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -202,8 +221,8 @@ export function SignInPage({ navigate, toast }: SignInProps) {
           <h1>Clarity for the<br /><em>cloud-minded.</em></h1>
           <p>Bring your infrastructure, finance and engineering conversations into one decision-ready workspace.</p>
           <div className="signin-mini-proof">
-            <span><Zap size={13} /> 127 resources</span>
-            <span><TrendingDown size={13} /> ₹47,150 opportunity</span>
+            <span><Zap size={13} /> 24 demo resources</span>
+            <span><TrendingDown size={13} /> ₹69,570 monthly opportunity</span>
           </div>
         </div>
         <div className="signin-corner-note"><span className="pulse-dot" /> DEMO ENVIRONMENT</div>
@@ -214,18 +233,18 @@ export function SignInPage({ navigate, toast }: SignInProps) {
           <div className="signin-mobile-brand">
             <a className="landing-brand" href="/">
               <span className="landing-brand-mark"><CloudCog size={17} /></span>
-              <span>Smart<span>Size</span></span>
+              <span>Right<span>Scale</span></span>
             </a>
           </div>
           <div className="signin-heading">
             <div className="landing-kicker muted">Workspace access</div>
             <h2>Welcome back.</h2>
-            <p>Sign in to continue to your SmartSize optimization workspace.</p>
+            <p>Sign in to continue to the SmartSize AWS rightsizing workspace.</p>
           </div>
 
-          <button className="google-btn" type="button" onClick={() => { toast('Google sign-in not configured', 'Connect Google OAuth to enable single sign-on for this workspace.'); }} disabled={loading}>
+          <button className="google-btn" type="button" onClick={() => { if (googleAvailable) window.location.assign('/api/auth/google/start'); }} disabled={loading || !googleAvailable} title={googleAvailable ? 'Continue with Google' : 'Google SSO is unavailable until OAuth credentials are configured.'}>
             <span className="google-g">G</span>
-            <span>Continue with Google</span>
+            <span>{googleAvailable ? 'Continue with Google' : 'Google sign-in unavailable'}</span>
             <span className="google-arrow"><ArrowRight size={14} /></span>
           </button>
 
@@ -269,11 +288,15 @@ export function RegisterPage({ navigate, toast }: SignInProps) {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (password !== confirmPassword) {
+      toast('Passwords do not match', 'Enter the same value in both password fields.');
+      return;
+    }
     setLoading(true);
     try {
       const response = await api.register({ name, email, password, confirmPassword });
       if (response.verificationRequired) {
-        toast('Account created', 'Check your email to activate the SmartSize workspace.', 'success');
+        toast('Account created', response.developmentToken ? `Development verification token: ${response.developmentToken}` : 'Check your email to activate the SmartSize workspace.', 'success');
         navigate('/verify-email');
       } else {
         toast('Account created', 'Your demo workspace is ready. Sign in to continue.', 'success');
@@ -329,13 +352,18 @@ export function VerificationRequiredPage({ user, navigate, toast }: { user: Veri
   const [token, setToken] = useState('');
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    const queryToken = new URLSearchParams(window.location.search).get('token');
+    if (queryToken) setToken(queryToken);
+  }, []);
+
   const verify = async (event: FormEvent) => {
     event.preventDefault();
     setLoading(true);
     try {
       await api.verifyEmail(token.trim());
-      toast('Email verified', 'Your SmartSize account is now active.', 'success');
-      navigate('/overview');
+      toast('Email verified', 'Your SmartSize account is now active. Please sign in.', 'success');
+      navigate('/signin');
     } catch (error) {
       toast('Verification failed', error instanceof Error ? error.message : 'The verification token was invalid.');
     } finally {
@@ -375,9 +403,9 @@ export function PasswordResetRequestPage({ navigate, toast }: SignInProps) {
     event.preventDefault();
     setLoading(true);
     try {
-      await api.requestPasswordReset(email);
-      toast('Password reset sent', 'If an account exists for that email, a secure reset link has been issued.', 'success');
-      navigate('/signin');
+      const result = await api.requestPasswordReset(email);
+      toast('Password reset sent', result.developmentToken ? 'Opening the local development-only reset flow.' : 'If an account exists for that email, a secure reset link has been issued.', 'success');
+      navigate(result.developmentToken ? `/reset-password?token=${encodeURIComponent(result.developmentToken)}` : '/signin');
     } catch (error) {
       toast('Reset request failed', error instanceof Error ? error.message : 'Unable to request a reset.');
     } finally {
@@ -416,11 +444,20 @@ export function PasswordResetPage({ navigate, toast }: SignInProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  useEffect(() => {
+    const queryToken = new URLSearchParams(window.location.search).get('token');
+    if (queryToken) setToken(queryToken);
+  }, []);
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (password !== confirmPassword) {
+      toast('Passwords do not match', 'Enter the same value in both password fields.');
+      return;
+    }
     setLoading(true);
     try {
-      await api.resetPassword(token.trim(), password);
+      await api.resetPassword(token.trim(), password, confirmPassword);
       toast('Password updated', 'Your SmartSize password has been reset successfully.', 'success');
       navigate('/signin');
     } catch (error) {

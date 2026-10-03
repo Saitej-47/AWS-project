@@ -12,7 +12,7 @@ const steps = [
 export function ProductWorkflow() {
   return <section className="card workflow-card mb-6 overflow-hidden p-5" aria-labelledby="workflow-title">
     <div className="flex items-start justify-between gap-4 mobile-stack">
-      <div><div className="eyebrow">Decision-support architecture</div><h2 id="workflow-title" className="mt-1 font-semibold tracking-tight text-slate-800">How SmartSize works</h2><p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">AWS remains the source of infrastructure and optimization signals. SmartSize adds the intelligence, explanation, prioritization and human review layer around that data.</p></div>
+      <div><div className="eyebrow">Decision-support architecture</div><h2 id="workflow-title" className="mt-1 font-semibold tracking-tight text-slate-800">How SmartSize works</h2><p className="mt-1 max-w-2xl text-xs leading-5 text-slate-500">AWS remains the source of infrastructure and optimization signals. SmartSize adds analysis, policy, explainable prioritization, and human review around that data.</p></div>
       <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[10px] font-semibold text-slate-500"><ShieldCheck size={13} className="text-emerald-600" /> Read-only analysis</div>
     </div>
     <div className="workflow-steps" role="list" aria-label="SmartSize workflow">

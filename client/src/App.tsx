@@ -11,8 +11,13 @@ import { LandingPage, PasswordResetPage, PasswordResetRequestPage, RegisterPage,
 import { CloudAdvisor } from './components/CloudAdvisor';
 import { ProductWorkflow } from './components/ProductWorkflow';
 import { api, type SessionUser } from './lib/api';
+import { ActionCenterPage, AuditTrailPage, AwsConnectionPage, OverviewDashboardPage, PolicyCenterPage, SavingsPage } from './pages/OperationsPages';
+import { RecommendationWorkflowPage } from './pages/RecommendationWorkflowPage';
+import { ReportsWorkspacePage } from './pages/ReportsPage';
+import { RecommendationsWorkspacePage, ResourceDetailWorkspacePage, ResourcesWorkspacePage, SimulatorWorkspacePage } from './pages/InventoryPages';
+import { CostAnalysisWorkspacePage, UtilizationWorkspacePage } from './pages/InsightsPages';
 
-const iconMap = { LayoutDashboard, Server, Sparkles, BarChart3, Activity: ActivityIcon, FlaskConical, FileText, ListChecks, Settings } as const;
+const iconMap = { LayoutDashboard, Server, Sparkles, BarChart3, Activity: ActivityIcon, FlaskConical, FileText, ListChecks, Settings, TrendingUp, ShieldCheck, Cloud } as const;
 
 type ToastMessage = { id: number; title: string; body: string; tone?: 'success' | 'info' };
 
@@ -80,6 +85,17 @@ function App() {
   }, [authReady, isDemoRoute, isPublic, location, navigate, sessionUser]);
 
   useEffect(() => {
+    if (!isDemoRoute) return;
+    void api.demoSession().then(({ user }) => {
+      setSessionUser(user);
+      navigate('/overview');
+    }).catch((error: unknown) => {
+      toast('Demo workspace unavailable', error instanceof Error ? error.message : 'The demo session could not be started.');
+      navigate('/');
+    });
+  }, [isDemoRoute, navigate]);
+
+  useEffect(() => {
     if (isPublic || !sessionUser || !sessionUser.emailVerified) return;
     api.dashboard().then(({ recommendations: liveRecommendations }) => {
       liveRecommendations.forEach((live) => { const local = recommendations.find((item) => item.id === live.id); if (local) local.status = live.status as Recommendation['status']; });
@@ -97,6 +113,15 @@ function App() {
     } catch (error) { toast('Approval failed', error instanceof Error ? error.message : 'The recommendation could not be approved.'); }
   };
 
+  const handleReject = async (recommendation: Recommendation, note?: string) => {
+    try {
+      await api.decision(recommendation.id, 'Rejected', note);
+      recommendation.status = 'Rejected';
+      setDataVersion((version) => version + 1);
+      toast('Recommendation rejected', `${recommendation.resourceName} was rejected and the decision was recorded.`, 'success');
+    } catch (error) { toast('Rejection failed', error instanceof Error ? error.message : 'The recommendation could not be rejected.'); }
+  };
+
   const handleSaveSimulation = async (selectedIds: string[]) => {
     try { await api.simulation(selectedIds); toast('Scenario saved', 'The rightsizing scenario is now recorded in the workspace.', 'success'); }
     catch (error) { toast('Scenario could not be saved', error instanceof Error ? error.message : 'The simulation service is unavailable.'); }
@@ -107,12 +132,12 @@ function App() {
   }
 
   if (isDemoRoute) {
-    return <OverviewPage navigate={navigate} toast={toast} />;
+    return <div className="page-wrap flex min-h-screen items-center justify-center text-sm text-slate-500">Opening the SmartSize demo workspace…</div>;
   }
 
   if (isPublic) {
     return <Switch>
-      <Route path="/" component={() => <LandingPage navigate={navigate} />} />
+      <Route path="/" component={() => <LandingPage navigate={navigate} toast={toast} onEnterDemo={async () => { const { user } = await api.demoSession(); setSessionUser(user); navigate('/overview'); }} />} />
       <Route path="/signin" component={() => <SignInPage navigate={navigate} toast={toast} />} />
       <Route path="/register" component={() => <RegisterPage navigate={navigate} toast={toast} />} />
       <Route path="/verify-email" component={() => <VerificationRequiredPage user={sessionUser} navigate={navigate} toast={toast} />} />
@@ -128,22 +153,26 @@ function App() {
 
   return (
     <div className="app-shell flex min-h-screen">
-      <Sidebar compact={sidebarCompact} open={sidebarOpen} currentPath={location} onNavigate={() => setSidebarOpen(false)} onToggle={() => setSidebarCompact((value) => !value)} onLogout={async () => { await api.logout().catch(() => undefined); navigate('/'); }} onAdvisor={() => setAdvisorOpen(true)} />
+      <Sidebar user={sessionUser} compact={sidebarCompact} open={sidebarOpen} currentPath={location} onNavigate={() => setSidebarOpen(false)} onToggle={() => setSidebarCompact((value) => !value)} onLogout={async () => { await api.logout().catch(() => undefined); navigate('/'); }} onAdvisor={() => setAdvisorOpen(true)} />
       {sidebarOpen && <button aria-label="Close navigation" className="fixed inset-0 z-20 bg-slate-950/30 lg:hidden" onClick={() => setSidebarOpen(false)} />}
       <div className="main-content flex min-w-0 flex-1 flex-col">
-        <TopBar currentPage={currentPage} searchTerm={searchTerm} setSearchTerm={setSearchTerm} onMenu={() => setSidebarOpen(true)} onSearch={() => setSearchOpen(true)} environmentOpen={environmentOpen} setEnvironmentOpen={setEnvironmentOpen} toast={toast} />
+        <TopBar user={sessionUser} currentPage={currentPage} searchTerm={searchTerm} setSearchTerm={setSearchTerm} onMenu={() => setSidebarOpen(true)} onSearch={() => setSearchOpen(true)} environmentOpen={environmentOpen} setEnvironmentOpen={setEnvironmentOpen} toast={toast} />
         <main className="min-w-0 flex-1">
           <Switch>
-            <Route path="/overview" component={() => <OverviewPage navigate={navigate} toast={toast} />} />
-            <Route path="/resources" component={() => <ResourcesPage navigate={navigate} toast={toast} />} />
-            <Route path="/resources/:id" component={(params) => <ResourceDetailPage id={params.params.id} navigate={navigate} toast={toast} />} />
-            <Route path="/recommendations" component={() => <RecommendationsPage navigate={navigate} toast={toast} onApprove={setApproval} approvedIds={approvedIds} />} />
-            <Route path="/recommendations/:id" component={(params) => <RecommendationDetailPage id={params.params.id} navigate={navigate} toast={toast} onApprove={setApproval} approvedIds={approvedIds} />} />
-            <Route path="/cost-analysis" component={() => <CostAnalysisPage />} />
-            <Route path="/utilization" component={() => <UtilizationPage navigate={navigate} />} />
-            <Route path="/simulator" component={() => <SimulatorPage toast={toast} onSave={handleSaveSimulation} />} />
-            <Route path="/reports" component={() => <ReportsPage toast={toast} />} />
-            <Route path="/activity" component={() => <ActivityPage />} />
+            <Route path="/overview" component={() => <OverviewDashboardPage navigate={navigate} />} />
+            <Route path="/resources" component={() => <ResourcesWorkspacePage navigate={navigate} />} />
+            <Route path="/resources/:id" component={(params) => <ResourceDetailWorkspacePage id={params.params.id} navigate={navigate} />} />
+            <Route path="/recommendations" component={() => <RecommendationsWorkspacePage navigate={navigate} />} />
+            <Route path="/recommendations/:id" component={(params) => <RecommendationWorkflowPage id={params.params.id} navigate={navigate} toast={toast} onApprove={setApproval} onReject={handleReject} />} />
+            <Route path="/actions" component={() => <ActionCenterPage toast={toast} />} />
+            <Route path="/savings" component={() => <SavingsPage toast={toast} />} />
+            <Route path="/policies" component={() => <PolicyCenterPage toast={toast} />} />
+            <Route path="/aws" component={() => <AwsConnectionPage toast={toast} />} />
+            <Route path="/cost-analysis" component={() => <CostAnalysisWorkspacePage />} />
+            <Route path="/utilization" component={() => <UtilizationWorkspacePage />} />
+            <Route path="/simulator" component={() => <SimulatorWorkspacePage onSave={handleSaveSimulation} />} />
+            <Route path="/reports" component={() => <ReportsWorkspacePage toast={toast} />} />
+            <Route path="/activity" component={() => <AuditTrailPage />} />
             <Route path="/settings" component={() => <SettingsPage toast={toast} />} />
             <Route component={() => <NotFound navigate={navigate} />} />
           </Switch>
@@ -157,19 +186,19 @@ function App() {
   );
 }
 
-function Sidebar({ compact, open, currentPath, onNavigate, onToggle, onLogout, onAdvisor }: { compact: boolean; open: boolean; currentPath: string; onNavigate: () => void; onToggle: () => void; onLogout: () => void | Promise<void>; onAdvisor: () => void }) {
+function Sidebar({ user, compact, open, currentPath, onNavigate, onToggle, onLogout, onAdvisor }: { user: SessionUser | null; compact: boolean; open: boolean; currentPath: string; onNavigate: () => void; onToggle: () => void; onLogout: () => void | Promise<void>; onAdvisor: () => void }) {
   return (
     <aside className={`sidebar flex shrink-0 flex-col ${compact ? 'compact' : ''} ${open ? 'open' : ''}`}>
       <div className="brand flex items-center gap-3 px-5 py-5">
         <Link href="/overview" className="brand-mark shrink-0" aria-label="SmartSize overview"><CloudCog size={18} strokeWidth={2.4} /></Link>
         <div className="brand-copy min-w-0">
           <div className="font-semibold tracking-tight text-white">Smart<span className="text-[#ffad32]">Size</span></div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-slate-500"><span className="inline-block h-1.5 w-1.5 rounded-full bg-[#ff9900]" /> Demo Environment</div>
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-slate-500"><span className="inline-block h-1.5 w-1.5 rounded-full bg-[#ff9900]" /> Demo Dataset</div>
         </div>
       </div>
       <div className="mx-5 mb-5 flex items-center gap-2 rounded-lg border border-[#2a3544] bg-[#151e2a] px-3 py-2.5">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[#253345] text-[#ffb448]"><Cloud size={14} /></div>
-        <div className="sidebar-foot-copy min-w-0"><div className="text-[10px] uppercase tracking-[.12em] text-slate-500">Environment</div><div className="truncate text-xs font-semibold text-slate-200">Demo AWS · Read-only</div></div>
+        <div className="sidebar-foot-copy min-w-0"><div className="text-[10px] uppercase tracking-[.12em] text-slate-500">Data source</div><div className="truncate text-xs font-semibold text-slate-200">Synthetic demo · No AWS writes</div></div>
       </div>
       <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
         <div className="side-section-label">Workspace</div>
@@ -183,7 +212,7 @@ function Sidebar({ compact, open, currentPath, onNavigate, onToggle, onLogout, o
       </nav>
       <div className="border-t border-[#253140] p-3">
         <button onClick={onToggle} className="nav-link w-full" aria-label={compact ? 'Expand sidebar' : 'Collapse sidebar'}><span className="flex h-5 w-5 items-center justify-center">{compact ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}</span><span className="nav-copy">Collapse navigation</span></button>
-        <div className="mt-2 flex items-center gap-2 rounded-lg px-3 py-2 sidebar-foot"><div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#f0a02a] text-[10px] font-bold text-[#261a09]">AN</div><div className="sidebar-foot-copy min-w-0"><div className="truncate text-xs font-semibold text-slate-200">Anika Nair</div><div className="truncate text-[10px] text-slate-500">Platform Admin</div></div><MoreHorizontal className="ml-auto shrink-0 text-slate-600" size={15} /></div>
+        <div className="mt-2 flex items-center gap-2 rounded-lg px-3 py-2 sidebar-foot"><div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[#f0a02a] text-[10px] font-bold text-[#261a09]">{user?.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() ?? 'SS'}</div><div className="sidebar-foot-copy min-w-0"><div className="truncate text-xs font-semibold text-slate-200">{user?.name ?? 'SmartSize Demo'}</div><div className="truncate text-[10px] text-slate-500">{user?.role ?? 'Platform Admin'}</div></div><MoreHorizontal className="ml-auto shrink-0 text-slate-600" size={15} /></div>
         <button onClick={onLogout} className="nav-link mt-1 w-full text-rose-300 hover:bg-rose-500/10 hover:text-rose-200" aria-label="Log out of SmartSize"><LogOut size={15} /><span className="nav-copy">Log out</span></button>
       </div>
     </aside>
@@ -196,14 +225,14 @@ function NavItem({ item, active, onNavigate }: { item: (typeof navItems)[number]
   return <Link href={item.path} onClick={onNavigate} className={`nav-link ${active ? 'active' : ''}`}><Icon size={16} strokeWidth={active ? 2.3 : 1.8} /><span className="nav-copy flex-1">{item.label}</span>{count && <span className="nav-count">{count}</span>}</Link>;
 }
 
-function TopBar({ currentPage, searchTerm, setSearchTerm, onMenu, onSearch, environmentOpen, setEnvironmentOpen, toast }: { currentPage: string; searchTerm: string; setSearchTerm: (value: string) => void; onMenu: () => void; onSearch: () => void; environmentOpen: boolean; setEnvironmentOpen: (value: boolean) => void; toast: (title: string, body: string, tone?: ToastMessage['tone']) => void }) {
+function TopBar({ user, currentPage, searchTerm, setSearchTerm, onMenu, onSearch, environmentOpen, setEnvironmentOpen, toast }: { user: SessionUser | null; currentPage: string; searchTerm: string; setSearchTerm: (value: string) => void; onMenu: () => void; onSearch: () => void; environmentOpen: boolean; setEnvironmentOpen: (value: boolean) => void; toast: (title: string, body: string, tone?: ToastMessage['tone']) => void }) {
   return <header className="topbar sticky top-0 z-10 flex items-center gap-4 px-4 sm:px-6 lg:px-8">
     <button className="mobile-top rounded-md p-1.5 text-slate-600 hover:bg-slate-100" onClick={onMenu} aria-label="Open navigation"><Menu size={20} /></button>
     <div className="hidden shrink-0 items-center gap-2 text-xs text-slate-400 md:flex"><span className="font-semibold text-slate-700">{currentPage}</span><ChevronRight size={13} /><span>Demo workspace</span></div>
     <div className="top-search relative ml-auto hidden w-full max-w-[330px] md:block"><Search className="pointer-events-none absolute left-3 top-2.5 text-slate-400" size={15} /><input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} onFocus={onSearch} onKeyDown={(e) => { if (e.key === 'Enter') onSearch(); }} className="input pl-9 pr-12" placeholder="Search resources, recommendations..." /><div className="absolute right-2 top-2 flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-400"><Command size={10} /> K</div></div>
-    <div className="relative"><button onClick={() => setEnvironmentOpen(!environmentOpen)} className="hidden items-center gap-2 rounded-lg border border-[#dfe4eb] bg-white px-3 py-2 text-left sm:flex"><span className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,.12)]" /><span className="text-xs font-semibold text-slate-700">Demo Environment</span><ChevronDown size={14} className="text-slate-400" /></button>{environmentOpen && <EnvironmentMenu close={() => setEnvironmentOpen(false)} toast={toast} />}</div>
+    <div className="relative"><button onClick={() => setEnvironmentOpen(!environmentOpen)} className="hidden items-center gap-2 rounded-lg border border-[#dfe4eb] bg-white px-3 py-2 text-left sm:flex"><span className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,.12)]" /><span className="text-xs font-semibold text-slate-700">Demo Dataset</span><ChevronDown size={14} className="text-slate-400" /></button>{environmentOpen && <EnvironmentMenu close={() => setEnvironmentOpen(false)} toast={toast} />}</div>
     <button onClick={() => toast('No new alerts', 'All monitored signals are within the current demo policy.')} className="relative rounded-lg p-2 text-slate-500 hover:bg-slate-100" aria-label="Notifications"><Bell size={18} /><span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[#ff9900]" /></button>
-    <button onClick={() => toast('Profile menu', 'Account settings are available in the Settings area.')} className="flex items-center gap-2 rounded-lg p-1.5 pr-0 hover:bg-slate-100"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0a02a] text-[10px] font-bold text-[#261a09]">AN</span><span className="hidden text-left sm:block"><span className="block text-xs font-bold text-slate-700">Anika Nair</span><span className="block text-[10px] text-slate-400">Admin</span></span><ChevronDown size={14} className="hidden text-slate-400 sm:block" /></button>
+    <button onClick={() => toast('Profile menu', 'Account settings are available in the Settings area.')} className="flex items-center gap-2 rounded-lg p-1.5 pr-0 hover:bg-slate-100"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0a02a] text-[10px] font-bold text-[#261a09]">{user?.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() ?? 'SS'}</span><span className="hidden text-left sm:block"><span className="block text-xs font-bold text-slate-700">{user?.name ?? 'SmartSize Demo'}</span><span className="block text-[10px] text-slate-400">{user?.role ?? 'Platform Admin'}</span></span><ChevronDown size={14} className="hidden text-slate-400 sm:block" /></button>
   </header>;
 }
 
@@ -212,7 +241,8 @@ function EnvironmentMenu({ close, toast }: { close: () => void; toast: (title: s
 }
 
 function PageHeader({ eyebrow, title, subtitle, actions, children }: { eyebrow?: string; title: string; subtitle?: string; actions?: ReactNode; children?: ReactNode }) {
-  return <div className="mb-7 flex items-start justify-between gap-4 mobile-stack"><div className="min-w-0">{eyebrow && <div className="eyebrow mb-2">{eyebrow}</div>}<h1 className="page-title">{title}</h1>{subtitle && <p className="page-subtitle mt-2 max-w-2xl">{subtitle}</p>}{children}</div>{actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}</div>;
+  const currentEyebrow = eyebrow?.replace('127 resources', `${resources.length} resources`).replace('43 opportunities', `${recommendations.length} opportunities`);
+  return <div className="mb-7 flex items-start justify-between gap-4 mobile-stack"><div className="min-w-0">{currentEyebrow && <div className="eyebrow mb-2">{currentEyebrow}</div>}<h1 className="page-title">{title}</h1>{subtitle && <p className="page-subtitle mt-2 max-w-2xl">{subtitle}</p>}{children}</div>{actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}</div>;
 }
 
 function StatusPill({ value }: { value: Resource['status'] | Recommendation['status'] }) { return <span className={`status-pill ${statusClass(value)}`}>{value}</span>; }
@@ -233,7 +263,9 @@ function OverviewPage({ navigate, toast }: { navigate: (path: string) => void; t
 
 function KpiCard({ label, value, detail, change, direction, icon, tone }: { label: string; value: string; detail: string; change: string; direction: 'up' | 'down'; icon: ReactNode; tone: string }) {
   const toneMap: Record<string, string> = { ink: 'bg-slate-100 text-slate-600', orange: 'bg-orange-100 text-orange-600', blue: 'bg-blue-100 text-blue-600', purple: 'bg-violet-100 text-violet-600', green: 'bg-emerald-100 text-emerald-600' };
-  return <div className="card kpi-card card-hover p-4"><div className="mb-4 flex items-start justify-between"><span className="eyebrow !text-[10px] !tracking-[.06em]">{label}</span><span className={`flex h-7 w-7 items-center justify-center rounded-lg ${toneMap[tone]}`}>{icon}</span></div><div className="kpi-number">{value}</div><div className="mt-1 flex items-center justify-between gap-2"><span className="text-[10px] text-slate-400">{detail}</span><span className={`flex items-center gap-0.5 text-[10px] font-bold ${direction === 'up' ? 'text-emerald-600' : 'text-slate-500'}`}>{direction === 'up' ? <TrendingUp size={11} /> : <TrendingDown size={11} />}{change}</span></div></div>;
+  const liveValue = label === 'Resources analyzed' ? String(resources.length) : label === 'Optimization opportunities' ? String(recommendations.length) : label === 'Projected optimized spend' ? fmt(monthlySpend - totalSavings) : value;
+  const liveDetail = label === 'Optimization opportunities' ? `${recommendations.filter((item) => item.status !== 'Approved' && item.status !== 'Rejected').length} awaiting decision` : detail;
+  return <div className="card kpi-card card-hover p-4"><div className="mb-4 flex items-start justify-between"><span className="eyebrow !text-[10px] !tracking-[.06em]">{label}</span><span className={`flex h-7 w-7 items-center justify-center rounded-lg ${toneMap[tone]}`}>{icon}</span></div><div className="kpi-number">{liveValue}</div><div className="mt-1 flex items-center justify-between gap-2"><span className="text-[10px] text-slate-400">{liveDetail}</span><span className={`flex items-center gap-0.5 text-[10px] font-bold ${direction === 'up' ? 'text-emerald-600' : 'text-slate-500'}`}>{direction === 'up' ? <TrendingUp size={11} /> : <TrendingDown size={11} />}{change}</span></div></div>;
 }
 
 function OpportunityTable({ compact = false, navigate, toast }: { compact?: boolean; navigate: (path: string) => void; toast: (title: string, body: string, tone?: ToastMessage['tone']) => void }) {
@@ -247,7 +279,20 @@ function ResourcesPage({ navigate, toast }: { navigate: (path: string) => void; 
   return <div className="page-wrap fade-up"><PageHeader eyebrow="Inventory · 127 resources" title="AWS Resources" subtitle="Monitor infrastructure utilization and identify resources that may require optimization." actions={<button className="btn btn-ghost" onClick={() => toast('Inventory refreshed', '127 demo resources are up to date.')}><RefreshCw size={14} /> Refresh inventory</button>} /><div className="mb-5 grid grid-cols-4 gap-3 grid-cols-2 sm:grid-cols-4"><MiniStat label="Resources" value="127" icon={<Server size={15} />} /><MiniStat label="Over-provisioned" value="43" icon={<TrendingDown size={15} />} tone="orange" /><MiniStat label="Needs review" value="13" icon={<CircleHelp size={15} />} tone="amber" /><MiniStat label="Healthy" value="65" icon={<CheckCircle2 size={15} />} tone="green" /></div><div className="card overflow-hidden"><div className="flex items-center gap-2 border-b border-slate-100 p-4 mobile-stack"><div className="relative flex-1"><Search className="pointer-events-none absolute left-3 top-2.5 text-slate-400" size={15} /><input className="input pl-9" placeholder="Search resources, instance IDs, regions..." value={query} onChange={(e) => setQuery(e.target.value)} /></div><div className="flex items-center gap-2"><select className="input !w-auto" value={service} onChange={(e) => setService(e.target.value)}><option>All services</option><option>EC2</option><option>RDS</option><option>EBS</option><option>Lambda</option></select><select className="input !w-auto" value={status} onChange={(e) => setStatus(e.target.value)}><option>All statuses</option><option>Over-provisioned</option><option>Healthy</option><option>Needs review</option><option>Optimized</option></select><select className="input !w-auto" value={risk} onChange={(e) => setRisk(e.target.value)}><option>All risk levels</option><option>Low</option><option>Medium</option><option>High</option></select><button className="btn btn-ghost !min-h-9 !px-2.5" onClick={() => toast('Filter view saved', 'Your current inventory filters are saved to this browser session.')}><SlidersHorizontal size={15} /></button></div></div>{filtered.length ? <div className="table-wrap"><table className="data-table"><thead><tr><th>Resource name</th><th>Service</th><th>Region</th><th>Instance type</th><th>CPU</th><th>Memory</th><th>Monthly cost</th><th>Status</th><th>Risk</th><th>Action</th></tr></thead><tbody>{filtered.map((resource) => <tr key={resource.id}><td><button className="text-left" onClick={() => navigate(`/resources/${resource.id}`)}><span className="block font-semibold text-slate-800 hover:text-orange-600">{resource.name}</span><span className="mt-0.5 block font-mono text-[10px] text-slate-400">{resource.instanceId}</span></button></td><td><span className="inline-flex items-center gap-1.5 font-semibold text-slate-600"><span className="h-5 w-5 rounded bg-slate-100 p-1 text-slate-500">{resource.service === 'EC2' ? <Server size={12} /> : resource.service === 'RDS' ? <DatabaseIcon /> : resource.service === 'EBS' ? <HardDriveIcon /> : <Zap size={12} />}</span>{resource.service}</span></td><td>{resource.region}</td><td className="font-mono text-[11px]">{resource.instanceType}</td><td><UtilCell value={resource.cpu} /></td><td><UtilCell value={resource.memory} /></td><td className="font-semibold text-slate-700">{fmt(resource.monthlyCost)}</td><td><StatusPill value={resource.status} /></td><td><RiskPill value={resource.risk} /></td><td><button className="btn btn-ghost !min-h-7 !px-2 text-[10px]" onClick={() => navigate(`/resources/${resource.id}`)}>View <ArrowRight size={12} /></button></td></tr>)}</tbody></table></div> : <EmptyState icon={<Search size={22} />} title="No resources found" body="Try a different search term or clear one of the filters." action={<button className="btn btn-ghost" onClick={() => { setQuery(''); setService('All services'); setStatus('All statuses'); setRisk('All risk levels'); }}>Clear filters</button>} />}</div><div className="mt-3 flex items-center justify-between text-[11px] text-slate-400"><span>Showing {filtered.length} of 127 resources</span><span className="flex items-center gap-1"><LockKeyhole size={12} /> Read-only demo inventory</span></div></div>;
 }
 
-function MiniStat({ label, value, icon, tone = 'blue' }: { label: string; value: string; icon: ReactNode; tone?: string }) { return <div className="card flex items-center gap-3 p-3.5"><span className={`flex h-8 w-8 items-center justify-center rounded-lg ${tone === 'orange' ? 'bg-orange-100 text-orange-600' : tone === 'amber' ? 'bg-amber-100 text-amber-600' : tone === 'green' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}>{icon}</span><div><div className="font-mono text-lg font-semibold tracking-tight text-slate-800">{value}</div><div className="text-[10px] text-slate-400">{label}</div></div></div>; }
+function MiniStat({ label, value, icon, tone = 'blue' }: { label: string; value: string; icon: ReactNode; tone?: string }) {
+  const counts: Record<string, number> = {
+    Resources: resources.length,
+    'Over-provisioned': resources.filter((resource) => resource.status === 'Over-provisioned').length,
+    'Needs review': resources.filter((resource) => resource.status === 'Needs review').length,
+    Healthy: resources.filter((resource) => resource.status === 'Healthy').length,
+    'Total recommendations': recommendations.length,
+    'Low risk': recommendations.filter((item) => item.risk === 'Low').length,
+    'Medium risk': recommendations.filter((item) => item.risk === 'Medium').length,
+    'High risk': recommendations.filter((item) => item.risk === 'High').length,
+  };
+  const shownValue = label in counts ? String(counts[label]) : value;
+  return <div className="card flex items-center gap-3 p-3.5"><span className={`flex h-8 w-8 items-center justify-center rounded-lg ${tone === 'orange' ? 'bg-orange-100 text-orange-600' : tone === 'amber' ? 'bg-amber-100 text-amber-600' : tone === 'green' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}>{icon}</span><div><div className="font-mono text-lg font-semibold tracking-tight text-slate-800">{shownValue}</div><div className="text-[10px] text-slate-400">{label}</div></div></div>;
+}
 function UtilCell({ value }: { value: number }) { return <div className="flex min-w-[80px] items-center gap-2"><div className="progress-track flex-1"><div className={`progress-fill ${value < 30 ? 'bg-orange-400' : value > 70 ? 'bg-emerald-500' : 'bg-blue-400'}`} style={{ width: `${value}%` }} /></div><span className="text-[10px] font-semibold text-slate-500">{value}%</span></div>; }
 function DatabaseIcon() { return <div className="flex items-center justify-center"><span className="h-2.5 w-3 rounded-[50%] border border-current" /></div>; }
 function HardDriveIcon() { return <div className="flex items-center justify-center"><span className="h-2.5 w-3 rounded-sm border border-current" /></div>; }
@@ -284,7 +329,7 @@ function SettingRow({ title, detail, on, setOn }: { title: string; detail: strin
 
 function SearchDialog({ term, setTerm, close, navigate }: { term: string; setTerm: (value: string) => void; close: () => void; navigate: (path: string) => void }) { const results = resources.filter((resource) => [resource.name, resource.instanceId, resource.region, resource.instanceType].join(' ').toLowerCase().includes(term.toLowerCase())).slice(0, 8); return <div className="search-overlay" onClick={close}><div className="search-panel" onClick={(e) => e.stopPropagation()}><div className="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-2xl"><div className="flex items-center gap-3 border-b border-slate-100 p-4"><Search size={18} className="text-orange-500" /><input autoFocus className="flex-1 text-sm text-slate-800 outline-none placeholder:text-slate-400" placeholder="Search resources, IDs, regions..." value={term} onChange={(e) => setTerm(e.target.value)} /><kbd className="rounded bg-slate-100 px-2 py-1 text-[10px] text-slate-400">ESC</kbd></div>{term && <div className="p-2">{results.length ? results.map((resource) => <button key={resource.id} onClick={() => { close(); navigate(`/resources/${resource.id}`); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left hover:bg-slate-50"><span className="flex h-8 w-8 items-center justify-center rounded-lg bg-blue-50 text-blue-600"><Server size={15} /></span><span className="min-w-0 flex-1"><span className="block truncate text-xs font-semibold text-slate-700">{resource.name}</span><span className="mt-0.5 block text-[10px] text-slate-400">{resource.service} · {resource.region} · {resource.instanceType}</span></span><ArrowRight size={14} className="text-slate-300" /></button>) : <EmptyState icon={<Search size={18} />} title="No matches" body="Try a resource name, instance ID, or region." />}</div>}{!term && <div className="p-5"><div className="eyebrow !text-[9px]">Quick search</div><div className="mt-3 grid grid-cols-2 gap-2"><button onClick={() => setTerm('Production')} className="rounded-lg bg-slate-50 px-3 py-2 text-left text-xs text-slate-600 hover:bg-orange-50">Production resources</button><button onClick={() => setTerm('ap-south-1')} className="rounded-lg bg-slate-50 px-3 py-2 text-left text-xs text-slate-600 hover:bg-orange-50">Mumbai region</button><button onClick={() => setTerm('m5.2xlarge')} className="rounded-lg bg-slate-50 px-3 py-2 text-left text-xs text-slate-600 hover:bg-orange-50">m5.2xlarge instances</button><button onClick={() => setTerm('Database')} className="rounded-lg bg-slate-50 px-3 py-2 text-left text-xs text-slate-600 hover:bg-orange-50">Database resources</button></div></div>}</div></div></div>; }
 
-function ApprovalModal({ recommendation, onCancel, onApprove }: { recommendation: Recommendation; onCancel: () => void; onApprove: (recommendation: Recommendation) => void }) { return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="approval-title"><div className="modal"><div className="flex items-start justify-between border-b border-slate-100 p-5"><div><div className="eyebrow !text-[9px]">Controlled workflow · Demo only</div><h2 id="approval-title" className="mt-2 font-semibold tracking-tight text-slate-800">Review optimization</h2><p className="mt-1 text-xs text-slate-500">Confirm the recommendation before marking it Approved.</p></div><button className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100" onClick={onCancel} aria-label="Close approval modal"><X size={18} /></button></div><div className="space-y-5 p-5"><div className="rounded-xl bg-slate-50 p-4"><div className="text-sm font-semibold text-slate-800">{recommendation.resourceName}</div><div className="mt-3 grid grid-cols-2 gap-3"><div><div className="eyebrow !text-[9px]">Current</div><div className="mt-1 font-mono text-sm text-slate-700">{recommendation.current}</div></div><div><div className="eyebrow !text-[9px]">Proposed</div><div className="mt-1 font-mono text-sm font-semibold text-orange-600">{recommendation.recommended}</div></div></div></div><div className="grid grid-cols-2 gap-3"><div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3"><div className="eyebrow !text-[9px] !text-emerald-700">Estimated savings</div><div className="mt-1 font-mono text-lg font-semibold text-emerald-700">{fmt(recommendation.savings)}<span className="ml-1 text-[10px] font-sans font-normal">/month</span></div></div><div className="rounded-xl border border-orange-100 bg-orange-50 p-3"><div className="eyebrow !text-[9px] !text-orange-700">Risk</div><div className="mt-1 text-lg font-semibold text-orange-700">{recommendation.risk}</div></div></div><div className="flex items-start gap-2 text-xs leading-5 text-slate-500"><ShieldCheck size={15} className="mt-0.5 shrink-0 text-emerald-600" />Performance impact is expected to be minimal based on observed utilization. No AWS changes will be made.</div></div><div className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/70 p-4"><button className="btn btn-ghost" onClick={onCancel}>Cancel</button><button className="btn btn-primary" onClick={() => onApprove(recommendation)}><Check size={14} /> Approve recommendation</button></div></div></div>; }
+function ApprovalModal({ recommendation, onCancel, onApprove }: { recommendation: Recommendation; onCancel: () => void; onApprove: (recommendation: Recommendation) => void }) { return <div className="modal-backdrop" role="dialog" aria-modal="true" aria-labelledby="approval-title"><div className="modal"><div className="flex items-start justify-between border-b border-slate-100 p-5"><div><div className="eyebrow !text-[9px]">Controlled workflow · Demo only</div><h2 id="approval-title" className="mt-2 font-semibold tracking-tight text-slate-800">Review optimization</h2><p className="mt-1 text-xs text-slate-500">Confirm the recommendation before marking it Approved.</p></div><button className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100" onClick={onCancel} aria-label="Close approval modal"><X size={18} /></button></div><div className="space-y-5 p-5"><div className="rounded-xl bg-slate-50 p-4"><div className="text-sm font-semibold text-slate-800">{recommendation.resourceName}</div><div className="mt-3 grid grid-cols-2 gap-3"><div><div className="eyebrow !text-[9px]">Current</div><div className="mt-1 font-mono text-sm text-slate-700">{recommendation.current}</div></div><div><div className="eyebrow !text-[9px]">Proposed</div><div className="mt-1 font-mono text-sm font-semibold text-orange-600">{recommendation.recommended}</div></div></div></div><div className="grid grid-cols-2 gap-3"><div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3"><div className="eyebrow !text-[9px] !text-emerald-700">Estimated savings</div><div className="mt-1 font-mono text-lg font-semibold text-emerald-700">{fmt(recommendation.savings)}<span className="ml-1 text-[10px] font-sans font-normal">/month</span></div></div><div className="rounded-xl border border-orange-100 bg-orange-50 p-3"><div className="eyebrow !text-[9px] !text-orange-700">Risk</div><div className="mt-1 text-lg font-semibold text-orange-700">{recommendation.risk}</div></div></div><div className="flex items-start gap-2 text-xs leading-5 text-slate-500"><ShieldCheck size={15} className="mt-0.5 shrink-0 text-emerald-600" />Demo estimate only: review the displayed risk and utilization evidence before approval. No AWS changes will be made.</div></div><div className="flex justify-end gap-2 border-t border-slate-100 bg-slate-50/70 p-4"><button className="btn btn-ghost" onClick={onCancel}>Cancel</button><button className="btn btn-primary" onClick={() => onApprove(recommendation)}><Check size={14} /> Approve recommendation</button></div></div></div>; }
 
 function ToastStack({ toasts }: { toasts: ToastMessage[] }) { return <div className="fixed bottom-5 right-5 z-[60] flex w-[min(360px,calc(100vw-28px))] flex-col gap-2">{toasts.map((item) => <div key={item.id} className="toast flex items-start gap-3 rounded-xl border border-slate-200 bg-white p-3.5 shadow-xl"><span className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg ${item.tone === 'success' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}>{item.tone === 'success' ? <Check size={14} /> : <Info size={14} />}</span><div><div className="text-xs font-semibold text-slate-800">{item.title}</div><div className="mt-1 text-[11px] leading-4 text-slate-500">{item.body}</div></div></div>)}</div>; }
 function EmptyState({ icon, title, body, action }: { icon: ReactNode; title: string; body: string; action?: ReactNode }) { return <div className="flex flex-col items-center justify-center px-5 py-14 text-center"><span className="flex h-11 w-11 items-center justify-center rounded-xl bg-slate-100 text-slate-400">{icon}</span><h3 className="mt-3 text-sm font-semibold text-slate-700">{title}</h3><p className="mt-1 max-w-xs text-xs leading-5 text-slate-400">{body}</p>{action && <div className="mt-4">{action}</div>}</div>; }
