@@ -10,6 +10,7 @@ export function ReportsWorkspacePage({ toast }: { toast: Toast }) {
   const [loading, setLoading] = useState(true);
   const [working, setWorking] = useState(false);
   const [error, setError] = useState("");
+  const [environment, setEnvironment] = useState<'demo' | 'manual' | 'aws'>('demo');
 
   const refresh = async () => {
     setLoading(true);
@@ -23,14 +24,17 @@ export function ReportsWorkspacePage({ toast }: { toast: Toast }) {
     }
   };
 
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    void refresh();
+    void api.session().then(({ user }) => setEnvironment(user?.environmentMode ?? 'demo')).catch(() => undefined);
+  }, []);
 
   const generate = async () => {
     setWorking(true);
     try {
       const report = await api.createReport();
       setReports((current) => [report, ...current]);
-      toast("Report generated", "The report snapshot was calculated from current API data and saved to the workspace.", "success");
+      toast("Report generated", "The report snapshot was calculated from current workspace data and saved to the workspace.", "success");
     } catch (reason) {
       toast("Report generation failed", reason instanceof Error ? reason.message : "The report could not be saved.");
     } finally {
@@ -48,7 +52,7 @@ export function ReportsWorkspacePage({ toast }: { toast: Toast }) {
       link.download = "smartsize-optimization-report.csv";
       link.click();
       URL.revokeObjectURL(url);
-      toast("CSV exported", "The report was generated from current backend recommendation data.", "success");
+      toast("CSV exported", environment === 'manual' ? "The file contains user-provided inputs and SmartSize manual estimates." : "The report was generated from current backend recommendation data.", "success");
     } catch (reason) {
       toast("CSV export failed", reason instanceof Error ? reason.message : "The report could not be exported.");
     } finally {
@@ -61,7 +65,7 @@ export function ReportsWorkspacePage({ toast }: { toast: Toast }) {
       <div>
         <div className="eyebrow mb-2">Reporting · Workspace data</div>
         <h1 className="page-title">Reports</h1>
-        <p className="page-subtitle mt-2 max-w-2xl">Generate a saved snapshot from current backend data or export recommendation records as CSV. PDF export is not available.</p>
+        <p className="page-subtitle mt-2 max-w-2xl">{environment === 'manual' ? 'Generate a saved snapshot of SmartSize manual estimates or export them as CSV. Costs are user-provided estimates, not verified savings.' : 'Generate a saved snapshot from current workspace data or export recommendation records as CSV. PDF export is not available.'}</p>
       </div>
       <div className="flex gap-2">
         <button className="btn btn-ghost" onClick={() => void exportCsv()} disabled={working}><Download size={14} /> Export CSV</button>

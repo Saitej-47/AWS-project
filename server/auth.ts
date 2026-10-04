@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { NextFunction, Request, Response } from "express";
 import type { User } from "./store";
 import { userRepository } from "./userRepository";
+import { workspaceRepository, type WorkspaceMembership } from "./workspaceRepository";
 
 const sessionCookie = "smartsize_session";
 const stateCookie = "smartsize_oauth_state";
@@ -24,6 +25,9 @@ function toSessionUser(user: User) {
     provider: user.provider,
     role: user.role,
     emailVerified: user.emailVerified,
+    workspaceName: user.workspaceName ?? `${user.name}'s Workspace`,
+    environmentMode: user.environmentMode ?? null,
+    workspaceId: user.workspaceId,
   };
 }
 
@@ -57,14 +61,30 @@ export async function readSession(request: Request): Promise<User | undefined> {
   if (!data.user?.id || data.exp <= Date.now()) return undefined;
   const currentUser = await userRepository.getById(data.user.id);
   if (!currentUser || (currentUser.sessionVersion ?? 0) !== data.sessionVersion) return undefined;
-  return { ...currentUser, passwordHash: undefined, verificationToken: undefined, resetToken: undefined, verificationTokenExpiresAt: undefined, resetTokenExpiresAt: undefined };
+  const workspace = await workspaceRepository.getDefaultForUser(currentUser.id);
+  return {
+    ...currentUser,
+    ...(workspace ? {
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      environmentMode: workspace.environment,
+    } : {}),
+    passwordHash: undefined,
+    verificationToken: undefined,
+    resetToken: undefined,
+    verificationTokenExpiresAt: undefined,
+    resetTokenExpiresAt: undefined,
+  };
 }
 
 export async function requireSession(request: Request, response: Response, next: NextFunction) {
   try {
     const user = await readSession(request);
     if (!user) return response.status(401).json({ error: "Authentication required" });
+    const workspace = await workspaceRepository.getDefaultForUser(user.id);
+    if (!workspace) return response.status(403).json({ error: "A workspace membership is required." });
     request.user = user;
+    request.workspace = workspace;
     return next();
   } catch (error) {
     return next(error);
@@ -76,7 +96,10 @@ export async function requireVerifiedSession(request: Request, response: Respons
     const user = await readSession(request);
     if (!user) return response.status(401).json({ error: "Authentication required" });
     if (!user.emailVerified) return response.status(403).json({ error: "Email verification required", verificationRequired: true });
+    const workspace = await workspaceRepository.getDefaultForUser(user.id);
+    if (!workspace) return response.status(403).json({ error: "A workspace membership is required." });
     request.user = user;
+    request.workspace = workspace;
     return next();
   } catch (error) {
     return next(error);
@@ -114,16 +137,39 @@ export function verifyOAuthState(request: Request, state: string) {
 
 export async function createDemoUser(email = "demo@smartsize.local") {
   const { randomUUID } = await import("node:crypto");
-  return userRepository.save({
+  const user = await userRepository.save({
     id: randomUUID(),
     email,
     name: "SmartSize Demo Admin",
     provider: "demo",
     role: "Platform Admin",
     emailVerified: true,
+    workspaceName: "SmartSize Demo Environment",
+    environmentMode: "demo",
     passwordHash: undefined,
     createdAt: new Date().toISOString(),
   });
+  let workspace: WorkspaceMembership | undefined = await workspaceRepository.getDefaultForUser(user.id);
+  if (!workspace) {
+    workspace = await workspaceRepository.createForUser(user, "SmartSize Demo Environment");
+  }
+  if (workspace.environment !== "demo") {
+    workspace = await workspaceRepository.updateForUser(user.id, workspace.id, { name: "SmartSize Demo Environment", environment: "demo" });
+  }
+  const updated = await userRepository.update(user.id, {
+    workspaceId: workspace?.id,
+    workspaceName: workspace?.name ?? "SmartSize Demo Environment",
+    environmentMode: "demo",
+    emailVerified: true,
+  });
+  return updated ?? { ...user, workspaceId: workspace?.id, workspaceName: workspace?.name, environmentMode: "demo" };
 }
 
-declare global { namespace Express { interface Request { user?: User } } }
+declare global {
+  namespace Express {
+    interface Request {
+      user?: User;
+      workspace?: WorkspaceMembership;
+    }
+  }
+}

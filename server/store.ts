@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { recommendations as seedRecommendations, resources as seedResources } from "../client/src/lib/mockData";
+import type { ManualAnalysisRecord } from "./services/manualAnalysisEngine";
 
 export type User = {
   id: string;
@@ -17,6 +18,13 @@ export type User = {
   resetToken?: string | null;
   resetTokenExpiresAt?: string | null;
   sessionVersion?: number;
+  workspaceId?: string;
+  workspaceName?: string;
+  environmentMode?: "demo" | "aws" | "manual" | null;
+  awsAccountId?: string;
+  awsRegion?: string;
+  awsArn?: string;
+  awsConnectedAt?: string;
   createdAt: string;
 };
 
@@ -42,6 +50,7 @@ export type OptimizationReport = {
   name: string;
   createdAt: string;
   createdBy: string;
+  environmentMode?: "demo" | "manual";
   summary: {
     totalResources: number;
     totalRecommendations: number;
@@ -66,6 +75,7 @@ export type Activity = {
 export type RightsizingAction = {
   id: string;
   recommendationId: string;
+  resourceName?: string;
   actionType: "Rightsize";
   oldConfiguration: string;
   newConfiguration: string;
@@ -92,8 +102,12 @@ type Database = {
   activity: Activity[];
   actions: RightsizingAction[];
   policies: RightsizingPolicy[];
+  manualAnalyses: ManualAnalysisRecord[];
   users: User[];
+  workspaces: Record<string, WorkspaceData>;
 };
+
+type WorkspaceData = Omit<Database, "users" | "workspaces">;
 
 const dataDirectory = path.resolve(process.env.DATA_DIRECTORY || process.cwd(), "data");
 const dataPath = path.join(dataDirectory, "smartsize.json");
@@ -110,7 +124,9 @@ function initialDatabase(): Database {
       { id: "staging", environment: "Staging", autoExecution: false, approvalRequired: true, maximumRisk: "Medium" },
       { id: "development", environment: "Development", autoExecution: false, approvalRequired: false, maximumRisk: "Medium" },
     ],
+    manualAnalyses: [],
     users: [],
+    workspaces: {},
   };
 }
 
@@ -118,7 +134,10 @@ function readDatabase(): Database {
   if (!fs.existsSync(dataPath)) return initialDatabase();
   try {
     const parsed = JSON.parse(fs.readFileSync(dataPath, "utf8")) as Partial<Database>;
-    return { ...initialDatabase(), ...parsed };
+    if (process.env.NODE_ENV === "production") {
+      return { ...initialDatabase(), users: parsed.users ?? [], workspaces: {} };
+    }
+    return { ...initialDatabase(), ...parsed, workspaces: parsed.workspaces ?? {} };
   } catch (error) {
     console.error(`Unable to read workspace data at ${dataPath}`, error);
     throw error;
@@ -126,6 +145,28 @@ function readDatabase(): Database {
 }
 
 let database = readDatabase();
+
+function workspaceData(workspaceId: string): WorkspaceData {
+  let data = database.workspaces[workspaceId];
+  if (!data) {
+    data = {
+      recommendations: seedRecommendations.map((recommendation) => ({ ...recommendation })),
+      simulations: [],
+      reports: [],
+      activity: [],
+      actions: [],
+      policies: [
+        { id: "production", environment: "Production", autoExecution: false, approvalRequired: true, maximumRisk: "Low" },
+        { id: "staging", environment: "Staging", autoExecution: false, approvalRequired: true, maximumRisk: "Medium" },
+        { id: "development", environment: "Development", autoExecution: false, approvalRequired: false, maximumRisk: "Medium" },
+      ],
+      manualAnalyses: [],
+    };
+    database.workspaces[workspaceId] = data;
+  }
+  data.manualAnalyses ??= [];
+  return data;
+}
 
 function writeDatabase() {
   fs.mkdirSync(dataDirectory, { recursive: true });
@@ -143,17 +184,49 @@ export function serializeUser(user: User) {
     provider: user.provider,
     role: user.role,
     emailVerified: user.emailVerified,
+    workspaceName: user.workspaceName ?? `${user.name}'s Workspace`,
+    environmentMode: user.environmentMode ?? null,
+    workspaceId: user.workspaceId,
   };
 }
 
 export const store = {
   getResources() { return seedResources; },
-  getRecommendations() { return database.recommendations; },
-  getSimulations() { return database.simulations; },
-  getReports() { return database.reports; },
-  getActivity() { return database.activity; },
-  getActions() { return database.actions; },
-  getPolicies() { return database.policies; },
+  getRecommendations(workspaceId?: string) { return workspaceId ? workspaceData(workspaceId).recommendations : database.recommendations; },
+  getSimulations(workspaceId?: string) { return workspaceId ? workspaceData(workspaceId).simulations : database.simulations; },
+  getReports(workspaceId?: string, environmentMode?: "demo" | "manual") {
+    const reports = workspaceId ? workspaceData(workspaceId).reports : database.reports;
+    return environmentMode ? reports.filter((report) => (report.environmentMode ?? "demo") === environmentMode) : reports;
+  },
+  getActivity(workspaceId?: string) { return workspaceId ? workspaceData(workspaceId).activity : database.activity; },
+  getActions(workspaceId?: string, source?: "DEMO" | "SMARTSIZE_MANUAL") {
+    const actions = workspaceId ? workspaceData(workspaceId).actions : database.actions;
+    return source === "SMARTSIZE_MANUAL"
+      ? actions.filter((action) => action.recommendationId.startsWith("manual-rec-"))
+      : source === "DEMO"
+        ? actions.filter((action) => !action.recommendationId.startsWith("manual-rec-"))
+        : actions;
+  },
+  getPolicies(workspaceId?: string) { return workspaceId ? workspaceData(workspaceId).policies : database.policies; },
+  getManualAnalyses(workspaceId: string) { return workspaceData(workspaceId).manualAnalyses; },
+  getManualAnalysis(workspaceId: string, id: string) { return workspaceData(workspaceId).manualAnalyses.find((analysis) => analysis.id === id); },
+  saveManualAnalysis(workspaceId: string, analysis: ManualAnalysisRecord) {
+    workspaceData(workspaceId).manualAnalyses.unshift(analysis);
+    writeDatabase();
+    return analysis;
+  },
+  updateManualAnalysis(workspaceId: string, id: string, updates: Partial<ManualAnalysisRecord>) {
+    const analysis = store.getManualAnalysis(workspaceId, id);
+    if (!analysis) return undefined;
+    Object.assign(analysis, updates);
+    writeDatabase();
+    return analysis;
+  },
+  addWorkspaceAction(workspaceId: string, action: RightsizingAction) {
+    workspaceData(workspaceId).actions.unshift(action);
+    writeDatabase();
+    return action;
+  },
   getUsers() { return database.users; },
   getUserByEmail(email: string) { return database.users.find((user) => user.email.toLowerCase() === email.toLowerCase()); },
   getUserById(id: string) { return database.users.find((user) => user.id === id); },
@@ -194,8 +267,9 @@ export const store = {
     writeDatabase();
     return database.users[index];
   },
-  recordAudit(action: string, user: string, resource: string, status: string, details?: string) {
-    database.activity.unshift({
+  recordAudit(action: string, user: string, resource: string, status: string, details?: string, workspaceId?: string) {
+    const activity = workspaceId ? workspaceData(workspaceId).activity : database.activity;
+    activity.unshift({
       id: crypto.randomUUID(),
       time: new Date().toISOString(),
       action,
@@ -206,8 +280,9 @@ export const store = {
     });
     writeDatabase();
   },
-  decideRecommendation(id: string, status: "Approved" | "Rejected", user: User, decisionNote?: string) {
-    const recommendation = database.recommendations.find((item) => item.id === id);
+  decideRecommendation(id: string, status: "Approved" | "Rejected", user: User, decisionNote?: string, workspaceId?: string) {
+    const scoped = workspaceId ? workspaceData(workspaceId) : database;
+    const recommendation = scoped.recommendations.find((item) => item.id === id);
     if (!recommendation) return undefined;
     recommendation.status = status;
     recommendation.updatedAt = new Date().toISOString();
@@ -215,7 +290,7 @@ export const store = {
     recommendation.approvedAt = status === "Approved" ? recommendation.updatedAt : undefined;
     recommendation.decisionNote = decisionNote;
     if (status === "Approved") {
-      database.actions.unshift({
+      scoped.actions.unshift({
         id: crypto.randomUUID(),
         recommendationId: recommendation.id,
         actionType: "Rightsize",
@@ -233,49 +308,53 @@ export const store = {
       recommendation.resourceName,
       status,
       decisionNote,
+      workspaceId,
     );
     writeDatabase();
     return recommendation;
   },
-  createSimulation(input: Omit<Simulation, "id" | "createdAt">, user: User) {
+  createSimulation(input: Omit<Simulation, "id" | "createdAt">, user: User, workspaceId?: string) {
     const simulation: Simulation = { ...input, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
-    database.simulations.unshift(simulation);
-    store.recordAudit("Created simulation", user.name, `${simulation.recommendationIds.length} recommendations`, "Simulated");
+    (workspaceId ? workspaceData(workspaceId).simulations : database.simulations).unshift(simulation);
+    store.recordAudit("Created simulation", user.name, `${simulation.recommendationIds.length} recommendations`, "Simulated", undefined, workspaceId);
     writeDatabase();
     return simulation;
   },
-  createReport(input: Omit<OptimizationReport, "id" | "createdAt">, user: User) {
+  createReport(input: Omit<OptimizationReport, "id" | "createdAt">, user: User, workspaceId?: string) {
     const report: OptimizationReport = { ...input, id: crypto.randomUUID(), createdAt: new Date().toISOString() };
-    database.reports.unshift(report);
-    store.recordAudit("Generated optimization report", user.name, report.name, "Generated");
+    (workspaceId ? workspaceData(workspaceId).reports : database.reports).unshift(report);
+    store.recordAudit("Generated optimization report", user.name, report.name, "Generated", undefined, workspaceId);
     writeDatabase();
     return report;
   },
-  scheduleAction(actionId: string, scheduledAt: string, user: User) {
-    const action = database.actions.find((item) => item.id === actionId);
+  scheduleAction(actionId: string, scheduledAt: string, user: User, workspaceId?: string) {
+    const scoped = workspaceId ? workspaceData(workspaceId) : database;
+    const action = scoped.actions.find((item) => item.id === actionId);
     if (!action || action.status !== "Approved") return undefined;
     action.status = "Scheduled";
     action.scheduledAt = scheduledAt;
-    const recommendation = database.recommendations.find((item) => item.id === action.recommendationId);
-    store.recordAudit("Scheduled rightsizing action", user.name, recommendation?.resourceName ?? action.recommendationId, "Scheduled", scheduledAt);
+    const recommendation = scoped.recommendations.find((item) => item.id === action.recommendationId);
+    store.recordAudit("Scheduled rightsizing action", user.name, recommendation?.resourceName ?? action.recommendationId, "Scheduled", scheduledAt, workspaceId);
     writeDatabase();
     return action;
   },
-  simulateAction(actionId: string, user: User) {
-    const action = database.actions.find((item) => item.id === actionId);
+  simulateAction(actionId: string, user: User, workspaceId?: string) {
+    const scoped = workspaceId ? workspaceData(workspaceId) : database;
+    const action = scoped.actions.find((item) => item.id === actionId);
     if (!action || action.status !== "Scheduled") return undefined;
     action.status = "Simulated";
     action.executedAt = new Date().toISOString();
-    const recommendation = database.recommendations.find((item) => item.id === action.recommendationId);
-    store.recordAudit("Simulated scheduled rightsizing action", user.name, recommendation?.resourceName ?? action.recommendationId, "Simulated", "No AWS resource was modified.");
+    const recommendation = scoped.recommendations.find((item) => item.id === action.recommendationId);
+    store.recordAudit("Simulated scheduled rightsizing action", user.name, recommendation?.resourceName ?? action.recommendationId, "Simulated", "No AWS resource was modified.", workspaceId);
     writeDatabase();
     return action;
   },
-  updatePolicy(id: string, updates: Partial<Omit<RightsizingPolicy, "id" | "environment">>, user: User) {
-    const policy = database.policies.find((item) => item.id === id);
+  updatePolicy(id: string, updates: Partial<Omit<RightsizingPolicy, "id" | "environment">>, user: User, workspaceId?: string) {
+    const scoped = workspaceId ? workspaceData(workspaceId) : database;
+    const policy = scoped.policies.find((item) => item.id === id);
     if (!policy) return undefined;
     Object.assign(policy, updates);
-    store.recordAudit("Updated rightsizing policy", user.name, policy.environment, "Updated", JSON.stringify(updates));
+    store.recordAudit("Updated rightsizing policy", user.name, policy.environment, "Updated", JSON.stringify(updates), workspaceId);
     writeDatabase();
     return policy;
   },

@@ -8,6 +8,8 @@ export type SessionUser = {
   provider: 'demo' | 'google' | 'email';
   role: 'Platform Admin' | 'Viewer';
   emailVerified: boolean;
+  workspaceName: string;
+  environmentMode: 'demo' | 'aws' | 'manual' | null;
 };
 
 export type RecommendationAnalysis = {
@@ -25,6 +27,7 @@ export type RecommendationAnalysis = {
 export type WorkflowAction = {
   id: string;
   recommendationId: string;
+  resourceName?: string;
   actionType: 'Rightsize';
   oldConfiguration: string;
   newConfiguration: string;
@@ -96,6 +99,99 @@ export type ResourceRecord = {
   peakMemory: number;
 };
 
+export type AwsHealthService = {
+  status: 'available' | 'unavailable' | 'not_checked';
+  category?: string;
+  message?: string;
+};
+
+export type AwsConnectionStatus = {
+  source: 'aws';
+  workspaceEnvironment: 'demo' | 'aws' | null;
+  status: 'connected' | 'not_connected';
+  accountId: string | null;
+  region: string;
+  syncedAt: string | null;
+  identity: { status: 'ready'; accountId: string; arn: string; userId: string; region: string } | { status: 'error'; category: string; message: string; region: string };
+  services: {
+    sts: AwsHealthService;
+    ec2: AwsHealthService;
+    ebs: AwsHealthService;
+    cloudWatch: AwsHealthService;
+    computeOptimizer: AwsHealthService;
+    costExplorer: AwsHealthService;
+  };
+};
+
+export type AwsInventorySnapshot = {
+  resources: Array<Record<string, unknown>>;
+  recommendations: Array<Record<string, unknown>>;
+  metrics: Array<{ resourceId: string; name: string; timestamp: string; value: number | null; unit: string | null; status: string }>;
+  cost: { amount: number | null; currency: string | null; period: { start: string; end: string } } | null;
+};
+
+export type ManualAnalysisInput = {
+  resourceName: string;
+  resourceType: 'EC2' | 'EBS' | 'RDS' | 'Lambda' | 'Other';
+  provider: 'AWS' | 'Azure' | 'GCP' | 'Other';
+  region: string;
+  currentConfiguration: string;
+  averageCpu: number | null;
+  peakCpu: number | null;
+  averageMemory: number | null;
+  peakMemory: number | null;
+  averageNetwork: number | null;
+  peakNetwork: number | null;
+  observationDays: 7 | 14 | 30 | 90;
+  storageGiB: number | null;
+  storageType: 'gp3' | 'gp2' | 'io2' | 'other' | null;
+  storageIops: number | null;
+  storageThroughput: number | null;
+  averageStorageUtilization: number | null;
+  peakStorageUtilization: number | null;
+  storageUtilizationUnknown: boolean;
+  hourlyCost: number | null;
+  monthlyCost: number | null;
+  workloadType: 'general' | 'compute' | 'memory' | 'storage' | 'burstable' | 'other';
+  availability: 'standard' | 'high' | 'mission-critical';
+  environment: 'Production' | 'Development' | 'Test';
+};
+
+export type ManualAnalysisResult = {
+  classification: 'underutilized' | 'right-sized' | 'potentially-undersized' | 'storage-optimization' | 'insufficient-data';
+  suggestedConfiguration: string;
+  currentMonthlyCost: number | null;
+  estimatedOptimizedMonthlyCost: number | null;
+  potentialMonthlySavings: number | null;
+  potentialAnnualSavings: number | null;
+  estimatedReductionPercent: number | null;
+  estimatedStorageGiB: number | null;
+  risk: 'Low' | 'Medium' | 'High';
+  analysisConfidence: number;
+  confidenceFactors: string[];
+  source: 'SmartSize Optimization Engine';
+  explanation: string;
+  assumptions: string[];
+};
+
+export type ManualAnalysisRecord = {
+  id: string;
+  resourceId: string;
+  recommendationId: string;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+  input: ManualAnalysisInput;
+  result: ManualAnalysisResult;
+  status: 'Analyzed' | 'Simulated' | 'Approved' | 'Rejected';
+  simulation: {
+    monthlySavings: number | null;
+    annualSavings: number | null;
+    estimatedReductionPercent: number | null;
+    simulatedAt: string;
+  } | null;
+};
+
 export type RecommendationRecord = {
   id: string;
   resourceId: string;
@@ -123,6 +219,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export const api = {
   authProviders: () => request<{ google: boolean }>('/api/auth/providers'),
   session: () => request<{ user: SessionUser | null }>('/api/auth/session'),
+  updateWorkspace: (values: Partial<Pick<SessionUser, 'workspaceName' | 'environmentMode'>>) => request<{ user: SessionUser }>('/api/workspace/preferences', { method: 'PATCH', body: JSON.stringify(values) }),
   register: (values: { name: string; email: string; password: string; confirmPassword: string }) => request<{ user: SessionUser; verificationRequired: boolean; developmentToken?: string; developmentOnly?: boolean; emailDeliveryConfigured: boolean; authMode: string; message: string }>('/api/auth/register', { method: 'POST', body: JSON.stringify(values) }),
   login: (values: { email: string; password: string }) => request<{ user: SessionUser }>('/api/auth/login', { method: 'POST', body: JSON.stringify(values) }),
   verifyEmail: (token: string) => request<{ user: SessionUser; message: string }>('/api/auth/verify-email', { method: 'POST', body: JSON.stringify({ token }) }),
@@ -158,7 +255,13 @@ export const api = {
   policies: () => request<WorkflowPolicy[]>('/api/policies'),
   updatePolicy: (id: string, updates: Partial<Pick<WorkflowPolicy, 'autoExecution' | 'approvalRequired' | 'maximumRisk'>>) => request<WorkflowPolicy>(`/api/policies/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(updates) }),
   simulatePolicy: (id: string) => request<{ environment: string; eligibleCount: number; potentialMonthlySavings: number; approvalRequiredCount: number; blockedCount: number; executionMode: string }>(`/api/policies/${encodeURIComponent(id)}/simulate`, { method: 'POST', body: JSON.stringify({}) }),
-  awsStatus: () => request<{ source: 'demo' | 'aws'; status: string; message: string; accountId: string | null; region: string | null; syncedAt: string | null; sources: string[] }>('/api/aws/status'),
-  syncAws: () => request<{ source: 'demo' | 'aws'; status: string; message: string; accountId: string | null; region: string | null; syncedAt: string | null; sources: string[] }>('/api/aws/sync', { method: 'POST', body: JSON.stringify({}) }),
+  awsStatus: () => request<AwsConnectionStatus>('/api/aws/status'),
+  awsInventory: () => request<AwsInventorySnapshot>('/api/aws/inventory'),
+  manualAnalyses: () => request<ManualAnalysisRecord[]>('/api/manual-analyses'),
+  createManualAnalysis: (input: ManualAnalysisInput) => request<ManualAnalysisRecord>('/api/manual-analyses', { method: 'POST', body: JSON.stringify(input) }),
+  simulateManualAnalysis: (id: string) => request<ManualAnalysisRecord>(`/api/manual-analyses/${encodeURIComponent(id)}/simulate`, { method: 'POST', body: JSON.stringify({}) }),
+  decideManualAnalysis: (id: string, status: 'Approved' | 'Rejected', note?: string) => request<ManualAnalysisRecord>(`/api/manual-analyses/${encodeURIComponent(id)}/decision`, { method: 'POST', body: JSON.stringify({ status, note }) }),
+  syncAws: (region?: string) => request<{ status: string; accountId: string; region: string; inventory: { instanceCount: number; volumeCount: number; metricPointCount: number; recommendationCount: number; syncedAt: string }; serviceResults: Record<string, string>; messages: string[] }>('/api/aws/sync', { method: 'POST', body: JSON.stringify({ region }) }),
+  connectAws: (region?: string) => request<{ status: string; accountId: string; arn: string; region: string }>('/api/aws/connect', { method: 'POST', body: JSON.stringify({ region }) }),
   advisor: (message: string) => request<{ answer: string; mode: 'openai' | 'demo-grounded'; source: 'aws' | 'demo' }>('/api/ai/advisor', { method: 'POST', body: JSON.stringify({ message }) }),
 };

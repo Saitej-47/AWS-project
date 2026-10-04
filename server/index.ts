@@ -10,18 +10,39 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { answerAdvisor } from "./ai";
 import { clearSession, createDemoUser, createOAuthState, invalidateSession, readSession, requireSession, requireVerifiedSession, setSession, verifyOAuthState } from "./auth";
-import { getDataSource } from "./services/dataSource";
 import { isEmailDeliveryConfigured, sendAccountEmail } from "./services/email";
 import { analyzeRecommendation } from "./services/rightsizingEngine";
 import { serializeUser, store, type RightsizingPolicy } from "./store";
 import { initializeDatabase, isDatabaseConfigured } from "./database";
 import { userRepository } from "./userRepository";
+import { workspaceRepository } from "./workspaceRepository";
+import { workspaceDataRepository } from "./workspaceDataRepository";
 import { resources as seedResources } from "../client/src/lib/mockData";
+import { createAwsReadOnlyService } from "./services/aws/awsReadOnlyService";
+import { analyzeManualInfrastructure, validateManualAnalysisInput } from "./services/manualAnalysisEngine";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+function requireDemoEnvironment(req: express.Request, res: express.Response) {
+  if (req.workspace?.environment === "demo") return true;
+  res.status(503).json({
+    code: "AWS_NOT_CONNECTED",
+    error: "The AWS environment is not connected. Demo data is not available in this workspace.",
+  });
+  return false;
+}
+
+function requireDemoOrManualEnvironment(req: express.Request, res: express.Response) {
+  if (req.workspace?.environment === "demo" || req.workspace?.environment === "manual") return true;
+  res.status(503).json({
+    code: "WORKSPACE_DATA_SOURCE_REQUIRED",
+    error: "Choose Demo or Manual Analysis to use this workflow. Live AWS data is not substituted here.",
+  });
+  return false;
+}
 
 function getAuthMode() {
   return (process.env.AUTH_MODE || (process.env.NODE_ENV === "production" ? "production" : "demo")).toLowerCase();
@@ -40,6 +61,7 @@ async function startServer() {
   }
   await initializeDatabase();
   await userRepository.migrateLegacyUsers();
+  await workspaceRepository.migrateLegacyWorkspaces();
 
   const app = express();
   const server = createServer(app);
@@ -64,16 +86,231 @@ async function startServer() {
   const resetLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: "draft-8", legacyHeaders: false });
 
   app.get("/api/health", (_req, res) => {
-    const dataSource = getDataSource();
-    const status = dataSource.getStatus();
     return res.json({
       ok: true,
       service: "smartsize-api",
-      mode: dataSource.kind,
+      mode: "workspace",
       accountStorage: isDatabaseConfigured() ? "mysql" : "json-development-fallback",
-      awsConnected: status.status === "ready" && dataSource.kind === "aws",
-      dataSource: status,
+      awsIntegration: "backend-read-only",
     });
+  });
+  app.get("/api/workspace", requireVerifiedSession, (req, res) => {
+    return res.json({ workspace: req.workspace });
+  });
+  app.get("/api/workspaces", requireVerifiedSession, async (req, res) => {
+    const workspace = await workspaceRepository.getDefaultForUser(req.user!.id);
+    return res.json({ workspaces: workspace ? [workspace] : [] });
+  });
+  app.post("/api/workspaces", requireVerifiedSession, async (req, res) => {
+    const name = typeof req.body?.name === "string" ? req.body.name.trim() : "";
+    if (name.length < 2 || name.length > 120) return res.status(400).json({ error: "Workspace name must be between 2 and 120 characters." });
+    const workspace = await workspaceRepository.createForUser(req.user!, name);
+    return res.status(201).json({ workspace });
+  });
+  app.patch("/api/workspace/preferences", requireVerifiedSession, async (req, res) => {
+    const updates: { workspaceName?: string; environmentMode?: "demo" | "aws" | "manual" } = {};
+    if (req.body?.workspaceName !== undefined) {
+      if (typeof req.body.workspaceName !== "string" || req.body.workspaceName.trim().length < 2 || req.body.workspaceName.trim().length > 120) {
+        return res.status(400).json({ error: "Workspace name must be between 2 and 120 characters." });
+      }
+      updates.workspaceName = req.body.workspaceName.trim();
+    }
+    if (req.body?.environmentMode !== undefined) {
+      if (!["demo", "aws", "manual"].includes(req.body.environmentMode)) {
+        return res.status(400).json({ error: "Environment must be demo, manual, or aws." });
+      }
+      if (req.body.environmentMode === "aws") {
+        const account = await workspaceRepository.getAwsAccount(req.workspace!.id);
+        if (!account || account.status !== "connected") {
+          return res.status(409).json({ error: "AWS is not connected. Live mode cannot be selected until a verified AWS integration is available." });
+        }
+      }
+      updates.environmentMode = req.body.environmentMode;
+    }
+    if (Object.keys(req.body ?? {}).some((key) => !["workspaceName", "environmentMode"].includes(key))) {
+      return res.status(400).json({ error: "Unsupported workspace preference." });
+    }
+    if (!Object.keys(updates).length) return res.status(400).json({ error: "No workspace preferences were provided." });
+    const workspaceUpdates: { name?: string; environment?: "demo" | "aws" | "manual" } = {};
+    if (updates.workspaceName !== undefined) workspaceUpdates.name = updates.workspaceName;
+    if (updates.environmentMode !== undefined) workspaceUpdates.environment = updates.environmentMode;
+    const workspace = await workspaceRepository.updateForUser(req.user!.id, req.workspace!.id, workspaceUpdates);
+    if (!workspace) return res.status(403).json({ error: "Workspace membership or owner/admin permission is required." });
+    const user = await userRepository.update(req.user!.id, {
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      environmentMode: workspace.environment ?? undefined,
+    });
+    if (!user) return res.status(404).json({ error: "Workspace account was not found." });
+    return res.json({ user: serializeUser({ ...user, workspaceId: workspace.id, workspaceName: workspace.name, environmentMode: workspace.environment ?? undefined }) });
+  });
+  app.post("/api/aws/connect", requireVerifiedSession, async (req, res) => {
+    const requestedRegion = typeof req.body?.region === "string" ? req.body.region : undefined;
+    if (requestedRegion && !/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(requestedRegion)) {
+      return res.status(400).json({ error: "A valid AWS region is required." });
+    }
+    const service = createAwsReadOnlyService({ region: requestedRegion });
+    const identity = await service.getIdentity();
+    if (identity.status !== "ready") {
+      return res.status(503).json({
+        code: identity.category,
+        error: identity.message,
+        status: "not_connected",
+      });
+    }
+    const workspace = await workspaceRepository.saveAwsIdentity(req.user!.id, req.workspace!.id, identity);
+    if (!workspace) return res.status(403).json({ error: "Workspace owner/admin permission is required to connect AWS." });
+    await userRepository.update(req.user!.id, {
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+      environmentMode: workspace.environment ?? undefined,
+    });
+    return res.json({
+      status: "connected",
+      accountId: identity.accountId,
+      arn: identity.arn,
+      region: identity.region,
+      workspace,
+    });
+  });
+  app.get("/api/aws/status", requireVerifiedSession, async (req, res) => {
+    const account = await workspaceRepository.getAwsAccount(req.workspace!.id);
+    const service = createAwsReadOnlyService({ region: account?.region });
+    const health = await service.getHealth();
+    const isConnected = health.identity.status === "ready"
+      && account?.status === "connected"
+      && account.accountId === health.identity.accountId;
+    return res.json({
+      source: "aws",
+      workspaceEnvironment: req.workspace!.environment,
+      status: isConnected ? "connected" : "not_connected",
+      accountId: health.identity.status === "ready" ? health.identity.accountId : account?.accountId ?? null,
+      region: health.region,
+      syncedAt: account?.syncedAt ?? null,
+      identity: health.identity,
+      services: health.services,
+    });
+  });
+  app.post("/api/aws/sync", requireVerifiedSession, async (req, res) => {
+    const requestedRegion = typeof req.body?.region === "string" ? req.body.region : undefined;
+    if (requestedRegion && !/^[a-z]{2}(?:-gov)?-[a-z]+-\d$/.test(requestedRegion)) {
+      return res.status(400).json({ error: "A valid AWS region is required." });
+    }
+    const existing = await workspaceRepository.getAwsAccount(req.workspace!.id);
+    const service = createAwsReadOnlyService({ region: requestedRegion ?? existing?.region });
+    const identity = await service.getIdentity();
+    if (identity.status !== "ready") {
+      return res.status(503).json({ code: identity.category, error: identity.message });
+    }
+    if (!existing || existing.accountId !== identity.accountId) {
+      return res.status(409).json({ error: "Connect this verified AWS account to the workspace before syncing." });
+    }
+    if (!isDatabaseConfigured()) {
+      return res.status(503).json({ error: "Live synchronization requires DATABASE_URL to persist workspace-scoped AWS data." });
+    }
+    const inventoryResult = await service.getEc2Inventory();
+    if (inventoryResult.status !== "ready") {
+      return res.status(502).json({ code: inventoryResult.category, error: inventoryResult.message });
+    }
+    const [metricsResult, optimizerResult, costResult] = await Promise.all([
+      service.getCloudWatchMetrics(inventoryResult.data.instances.map((instance) => instance.instanceId)),
+      service.getComputeOptimizerRecommendations(),
+      service.getCostExplorer(),
+    ]);
+    const persisted = await workspaceDataRepository.persistAwsSync(
+      req.workspace!.id,
+      inventoryResult.data,
+      metricsResult.status === "ready" ? metricsResult.data : { periodSeconds: 3600, startTime: "", endTime: "", metrics: [] },
+      optimizerResult.status === "ready" ? optimizerResult.recommendations : [],
+      inventoryResult.region,
+      costResult.status === "ready" ? costResult : undefined,
+    );
+    return res.json({
+      status: "synced",
+      accountId: identity.accountId,
+      region: identity.region,
+      inventory: persisted,
+      serviceResults: {
+        cloudWatch: metricsResult.status === "ready" ? "available" : metricsResult.category,
+        computeOptimizer: optimizerResult.status,
+        costExplorer: costResult.status === "ready" ? "available" : costResult.category,
+      },
+      messages: [
+        ...(metricsResult.status === "unavailable" ? [metricsResult.message] : []),
+        ...(optimizerResult.status !== "ready" ? [optimizerResult.message] : []),
+        ...(costResult.status === "unavailable" ? [costResult.message] : []),
+      ],
+    });
+  });
+  app.get("/api/aws/inventory", requireVerifiedSession, async (req, res) => {
+    if (req.workspace!.environment !== "aws") {
+      return res.status(409).json({ error: "Select the connected AWS environment to view live inventory." });
+    }
+    if (!isDatabaseConfigured()) return res.status(503).json({ error: "Live AWS inventory requires DATABASE_URL." });
+    return res.json(await workspaceDataRepository.getAwsSnapshot(req.workspace!.id));
+  });
+  app.get("/api/manual-analyses", requireVerifiedSession, async (req, res) => {
+    if (req.workspace!.environment !== "manual") {
+      return res.status(409).json({ code: "MANUAL_MODE_REQUIRED", error: "Select Manual Analysis mode to view manual analyses." });
+    }
+    return res.json(await workspaceDataRepository.getManualAnalyses(req.workspace!.id));
+  });
+  app.post("/api/manual-analyses", requireVerifiedSession, async (req, res) => {
+    if (req.workspace!.environment !== "manual") {
+      return res.status(409).json({ code: "MANUAL_MODE_REQUIRED", error: "Select Manual Analysis mode before submitting infrastructure details." });
+    }
+    if (!validateManualAnalysisInput(req.body)) {
+      return res.status(422).json({ error: "Manual analysis input is invalid. Check required fields, utilization ranges, costs, and selected options." });
+    }
+    const input = {
+      ...req.body,
+      resourceName: req.body.resourceName.trim(),
+      currentConfiguration: req.body.currentConfiguration.trim(),
+      region: req.body.region.trim(),
+    };
+    const analysisId = crypto.randomUUID();
+    const record = {
+      id: analysisId,
+      resourceId: `manual-resource-${analysisId}`,
+      recommendationId: `manual-rec-${analysisId}`,
+      createdBy: req.user!.email,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      input,
+      result: analyzeManualInfrastructure(input),
+      status: "Analyzed" as const,
+      simulation: null,
+    };
+    const created = await workspaceDataRepository.createManualAnalysis(req.workspace!.id, req.user!, record);
+    return res.status(201).json(created);
+  });
+  app.get("/api/manual-analyses/:id", requireVerifiedSession, async (req, res) => {
+    if (req.workspace!.environment !== "manual") {
+      return res.status(409).json({ code: "MANUAL_MODE_REQUIRED", error: "Select Manual Analysis mode to view this analysis." });
+    }
+    const analysis = await workspaceDataRepository.getManualAnalysis(req.workspace!.id, req.params.id);
+    return analysis ? res.json(analysis) : res.status(404).json({ error: "Manual analysis not found in this workspace." });
+  });
+  app.post("/api/manual-analyses/:id/simulate", requireVerifiedSession, async (req, res) => {
+    if (req.workspace!.environment !== "manual") {
+      return res.status(409).json({ code: "MANUAL_MODE_REQUIRED", error: "Select Manual Analysis mode to simulate this recommendation." });
+    }
+    const analysis = await workspaceDataRepository.simulateManualAnalysis(req.workspace!.id, req.params.id, req.user!);
+    return analysis ? res.json(analysis) : res.status(404).json({ error: "Manual analysis was not found or is already finalized." });
+  });
+  app.post("/api/manual-analyses/:id/decision", requireVerifiedSession, async (req, res) => {
+    if (req.workspace!.environment !== "manual") {
+      return res.status(409).json({ code: "MANUAL_MODE_REQUIRED", error: "Select Manual Analysis mode to review this recommendation." });
+    }
+    const status = req.body?.status;
+    if (status !== "Approved" && status !== "Rejected") {
+      return res.status(422).json({ error: "Decision must be Approved or Rejected." });
+    }
+    if (req.body?.note !== undefined && (typeof req.body.note !== "string" || req.body.note.length > 500)) {
+      return res.status(422).json({ error: "Decision note must be 500 characters or fewer." });
+    }
+    const analysis = await workspaceDataRepository.decideManualAnalysis(req.workspace!.id, req.params.id, status, req.user!, req.body.note);
+    return analysis ? res.json(analysis) : res.status(409).json({ error: "Run the simulation before finalizing the manual recommendation." });
   });
   app.get("/api/auth/providers", (_req, res) => res.json({
     google: Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET),
@@ -117,6 +354,7 @@ async function startServer() {
       role: "Platform Admin",
       passwordHash: await bcrypt.hash(password, 12),
       emailVerified: !requiresVerification,
+      workspaceName: `${name}'s Workspace`,
       verificationToken: rawVerificationToken ? crypto.createHash("sha256").update(rawVerificationToken).digest("hex") : null,
       verificationTokenExpiresAt: requiresVerification ? new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString() : null,
       createdAt: new Date().toISOString(),
@@ -133,7 +371,13 @@ async function startServer() {
       }
     }
 
-    store.recordAudit("User registered", user.name, "SmartSize workspace", "Created");
+    const workspace = await workspaceRepository.createForUser(user, user.workspaceName ?? `${name}'s Workspace`);
+    const userWithWorkspace = await userRepository.update(user.id, {
+      workspaceId: workspace.id,
+      workspaceName: workspace.name,
+    });
+    if (!userWithWorkspace) return res.status(500).json({ error: "Account was created, but its workspace could not be loaded." });
+    await workspaceDataRepository.recordAudit(workspace.id, userWithWorkspace, "USER_REGISTERED", "SmartSize workspace", "Created");
 
     const developmentToken = requiresVerification && rawVerificationToken && !emailConfigured && process.env.NODE_ENV !== "production"
       ? rawVerificationToken
@@ -146,7 +390,7 @@ async function startServer() {
       ...(developmentToken ? { developmentToken, developmentOnly: true } : {}),
       emailDeliveryConfigured: emailConfigured,
       authMode,
-      user: serializeUser(user),
+      user: serializeUser({ ...userWithWorkspace, workspaceId: workspace.id, workspaceName: workspace.name }),
     });
   });
 
@@ -164,7 +408,8 @@ async function startServer() {
     });
 
     if (!updatedUser) return res.status(500).json({ error: "Unable to verify account." });
-    store.recordAudit("Email verified", updatedUser.name, "Account", "Verified");
+    const workspace = await workspaceRepository.getDefaultForUser(updatedUser.id);
+    if (workspace) await workspaceDataRepository.recordAudit(workspace.id, updatedUser, "EMAIL_VERIFIED", "Account", "Verified");
     return res.json({ message: "Email verified successfully. You can now sign in.", user: serializeUser(updatedUser) });
   });
 
@@ -177,13 +422,11 @@ async function startServer() {
 
     const user = await userRepository.getByEmail(email);
     if (!user || !user.passwordHash) {
-      store.recordAudit("Failed login attempt", email, "Authentication", "Blocked");
       return res.status(401).json({ error: "Invalid email or password." });
     }
 
     const validPassword = await bcrypt.compare(password, user.passwordHash);
     if (!validPassword) {
-      store.recordAudit("Failed login attempt", user.email, "Authentication", "Blocked");
       return res.status(401).json({ error: "Invalid email or password." });
     }
 
@@ -195,7 +438,8 @@ async function startServer() {
     }
 
     setSession(res, user);
-    store.recordAudit("Login", user.name, "SmartSize workspace", "Authenticated");
+    const workspace = await workspaceRepository.getDefaultForUser(user.id);
+    if (workspace) await workspaceDataRepository.recordAudit(workspace.id, user, "LOGIN", "SmartSize workspace", "Authenticated");
     return res.json({ user: serializeUser(user) });
   });
 
@@ -205,7 +449,7 @@ async function startServer() {
       const user = await readSession(req);
       if (user) {
         await invalidateSession(user);
-        store.recordAudit("Logout", user.name, "SmartSize workspace", "Signed out");
+        if (user.workspaceId) await workspaceDataRepository.recordAudit(user.workspaceId, user, "LOGOUT", "SmartSize workspace", "Signed out");
       }
       return res.status(204).end();
     } catch (error) {
@@ -234,7 +478,8 @@ async function startServer() {
         console.error("Password reset email delivery failed.", error);
         return res.status(502).json({ error: "Password reset email could not be delivered. Please try again later." });
       }
-      store.recordAudit("Password reset requested", user.name, "Account", "Pending");
+      const workspace = await workspaceRepository.getDefaultForUser(user.id);
+      if (workspace) await workspaceDataRepository.recordAudit(workspace.id, user, "PASSWORD_RESET_REQUESTED", "Account", "Pending");
     }
 
     return res.json({
@@ -263,7 +508,8 @@ async function startServer() {
     });
 
     if (!updatedUser) return res.status(500).json({ error: "Unable to update password." });
-    store.recordAudit("Password reset", updatedUser.name, "Account", "Updated");
+    const workspace = await workspaceRepository.getDefaultForUser(updatedUser.id);
+    if (workspace) await workspaceDataRepository.recordAudit(workspace.id, updatedUser, "PASSWORD_RESET", "Account", "Updated");
     return res.json({ message: "Password updated successfully." });
   });
 
@@ -288,15 +534,16 @@ async function startServer() {
     }
 
     setSession(res, user);
-    store.recordAudit("Demo login", user.name, "SmartSize workspace", "Authenticated");
+    const workspace = await workspaceRepository.getDefaultForUser(user.id);
+    if (workspace) await workspaceDataRepository.recordAudit(workspace.id, user, "DEMO_LOGIN", "SmartSize workspace", "Authenticated");
     return res.json({ user: serializeUser(user) });
   });
 
   app.post("/api/auth/demo-session", authLimiter, async (_req, res) => {
-    if (getDataSource().kind !== "demo") return res.status(409).json({ error: "The demo workspace is unavailable while live mode is selected." });
     const user = await createDemoUser();
     setSession(res, user);
-    store.recordAudit("Entered demo workspace", user.name, "Demo dataset", "Authenticated");
+    const workspace = await workspaceRepository.getDefaultForUser(user.id);
+    if (workspace) await workspaceDataRepository.recordAudit(workspace.id, user, "DEMO_ENTERED", "Demo dataset", "Authenticated");
     return res.json({ user: serializeUser(user) });
   });
 
@@ -359,36 +606,60 @@ async function startServer() {
     }
   });
 
-  app.use("/api", (req, res, next) => {
-    const demoOnlyPaths = ["/dashboard", "/resources", "/recommendations", "/activity", "/audit", "/actions", "/policies", "/savings", "/simulations", "/reports"];
-    const isDemoDataRoute = demoOnlyPaths.some((route) => req.path === route || req.path.startsWith(`${route}/`));
-    if (isDemoDataRoute && getDataSource().kind === "aws") {
-      return res.status(503).json({ error: "Live AWS is not connected; the demo dataset is not served in live mode." });
-    }
-    return next();
+  app.get("/api/dashboard", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
+    const workspaceId = req.workspace!.id;
+    return res.json({
+      resources: await workspaceDataRepository.getResources(workspaceId),
+      recommendations: await workspaceDataRepository.getRecommendations(workspaceId),
+      simulations: await workspaceDataRepository.getSimulations(workspaceId),
+      activity: await workspaceDataRepository.getAudit(workspaceId),
+    });
   });
-
-  app.get("/api/dashboard", requireVerifiedSession, (_req, res) => res.json({ resources: store.getResources(), recommendations: store.getRecommendations(), simulations: store.getSimulations(), activity: store.getActivity() }));
-  app.get("/api/resources", requireVerifiedSession, (_req, res) => res.json(store.getResources()));
-  app.get("/api/resources/:id", requireVerifiedSession, (req, res) => {
-    const resource = seedResources.find((item) => item.id === req.params.id);
+  app.get("/api/resources", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
+    return res.json(await workspaceDataRepository.getResources(req.workspace!.id));
+  });
+  app.get("/api/resources/:id", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
+    const workspaceId = req.workspace!.id;
+    const resource = await workspaceDataRepository.getResource(workspaceId, req.params.id);
     if (!resource) return res.status(404).json({ error: "Resource not found" });
-    const recommendation = store.getRecommendations().find((item) => item.resourceId === resource.id);
+    const recommendation = (await workspaceDataRepository.getRecommendations(workspaceId)).find((item) => item.resourceId === req.params.id);
     return res.json({ resource, recommendation: recommendation ? { ...recommendation, analysis: analyzeRecommendation(recommendation, resource) } : null });
   });
-  app.get("/api/recommendations", requireVerifiedSession, (_req, res) => res.json(store.getRecommendations()));
-  app.get("/api/recommendations/:id", requireVerifiedSession, (req, res) => {
-    const recommendation = store.getRecommendations().find((item) => item.id === req.params.id);
+  app.get("/api/recommendations", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
+    return res.json(await workspaceDataRepository.getRecommendations(req.workspace!.id));
+  });
+  app.get("/api/recommendations/:id", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
+    const workspaceId = req.workspace!.id;
+    const recommendation = (await workspaceDataRepository.getRecommendations(workspaceId)).find((item) => item.id === req.params.id);
     if (!recommendation) return res.status(404).json({ error: "Recommendation not found" });
-    const resource = seedResources.find((item) => item.id === recommendation.resourceId);
+    const resource = await workspaceDataRepository.getResource(workspaceId, recommendation.resourceId);
     if (!resource) return res.status(404).json({ error: "Recommendation resource not found" });
     return res.json({ recommendation, resource, analysis: analyzeRecommendation(recommendation, resource) });
   });
-  app.get("/api/activity", requireVerifiedSession, (_req, res) => res.json(store.getActivity()));
-  app.get("/api/audit", requireVerifiedSession, (_req, res) => res.json(store.getActivity()));
-  app.get("/api/actions", requireVerifiedSession, (_req, res) => res.json(store.getActions()));
-  app.get("/api/policies", requireVerifiedSession, (_req, res) => res.json(store.getPolicies()));
-  app.put("/api/policies/:id", requireVerifiedSession, (req, res) => {
+  app.get("/api/activity", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoOrManualEnvironment(req, res)) return;
+    return res.json(await workspaceDataRepository.getAudit(req.workspace!.id));
+  });
+  app.get("/api/audit", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoOrManualEnvironment(req, res)) return;
+    return res.json(await workspaceDataRepository.getAudit(req.workspace!.id));
+  });
+  app.get("/api/actions", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoOrManualEnvironment(req, res)) return;
+    const source = req.workspace!.environment === "manual" ? "SMARTSIZE_MANUAL" : "DEMO";
+    return res.json(await workspaceDataRepository.getActions(req.workspace!.id, source));
+  });
+  app.get("/api/policies", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
+    return res.json(await workspaceDataRepository.getPolicies(req.workspace!.id));
+  });
+  app.put("/api/policies/:id", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
     const allowed = ["autoExecution", "approvalRequired", "maximumRisk"] as const;
     const updates: Partial<Omit<RightsizingPolicy, "id" | "environment">> = {};
     if (req.body?.autoExecution !== undefined) {
@@ -409,19 +680,23 @@ async function startServer() {
     if (req.params.id === "production" && updates.approvalRequired === false) {
       return res.status(409).json({ error: "Production policy must retain mandatory human approval." });
     }
-    const policy = store.updatePolicy(req.params.id, updates, req.user!);
+    const policy = await workspaceDataRepository.updatePolicy(req.workspace!.id, req.params.id, updates, req.user!);
     return policy ? res.json(policy) : res.status(404).json({ error: "Policy not found" });
   });
-  app.post("/api/policies/:id/simulate", requireVerifiedSession, (req, res) => {
-    const policy = store.getPolicies().find((item) => item.id === req.params.id);
+  app.post("/api/policies/:id/simulate", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
+    const workspaceId = req.workspace!.id;
+    const policy = (await workspaceDataRepository.getPolicies(workspaceId)).find((item) => item.id === req.params.id);
     if (!policy) return res.status(404).json({ error: "Policy not found" });
     const riskRank = { Low: 1, Medium: 2, High: 3 };
-    const eligible = store.getRecommendations().filter((recommendation) => {
-      const resource = seedResources.find((item) => item.id === recommendation.resourceId);
+    const recommendations = await workspaceDataRepository.getRecommendations(workspaceId);
+    const resources = await workspaceDataRepository.getResources(workspaceId);
+    const eligible = recommendations.filter((recommendation) => {
+      const resource = resources.find((item) => item.id === recommendation.resourceId);
       return Boolean(resource && resource.env === policy.environment && recommendation.status !== "Rejected" && riskRank[recommendation.risk] <= riskRank[policy.maximumRisk]);
     });
-    const blocked = store.getRecommendations().filter((recommendation) => {
-      const resource = seedResources.find((item) => item.id === recommendation.resourceId);
+    const blocked = recommendations.filter((recommendation) => {
+      const resource = resources.find((item) => item.id === recommendation.resourceId);
       return Boolean(resource && resource.env === policy.environment && recommendation.status !== "Rejected" && riskRank[recommendation.risk] > riskRank[policy.maximumRisk]);
     });
     return res.json({
@@ -433,14 +708,37 @@ async function startServer() {
       executionMode: "Simulation only; no AWS resources will be modified.",
     });
   });
-  app.get("/api/savings", requireVerifiedSession, (_req, res) => {
-    const recommendations = store.getRecommendations();
-    const actions = store.getActions();
+  app.get("/api/savings", requireVerifiedSession, async (req, res) => {
+    if (req.workspace!.environment === "manual") {
+      const analyses = await workspaceDataRepository.getManualAnalyses(req.workspace!.id);
+      const actions = await workspaceDataRepository.getActions(req.workspace!.id, "SMARTSIZE_MANUAL");
+      const eligible = analyses.filter((analysis) => analysis.status !== "Rejected");
+      const currentMonthlySpend = eligible.reduce((sum, analysis) => sum + (analysis.result.currentMonthlyCost ?? 0), 0);
+      const potentialMonthlySavings = eligible.reduce((sum, analysis) => sum + (analysis.result.potentialMonthlySavings ?? 0), 0);
+      const simulatedMonthlySavings = analyses
+        .filter((analysis) => analysis.status === "Simulated" || analysis.status === "Approved")
+        .reduce((sum, analysis) => sum + (analysis.result.potentialMonthlySavings ?? 0), 0);
+      return res.json({
+        currency: "INR",
+        currentMonthlySpend,
+        potentialMonthlySavings,
+        projectedAnnualSavings: potentialMonthlySavings * 12,
+        simulatedMonthlySavings,
+        verifiedSavings: 0,
+        verifiedSavingsNote: "Manual analyses are estimates. No infrastructure changes or savings have been verified.",
+        actions,
+      });
+    }
+    if (!requireDemoEnvironment(req, res)) return;
+    const workspaceId = req.workspace!.id;
+    const recommendations = await workspaceDataRepository.getRecommendations(workspaceId);
+    const actions = await workspaceDataRepository.getActions(workspaceId, "DEMO");
     const potentialMonthly = recommendations.filter((item) => item.status !== "Rejected").reduce((sum, item) => sum + item.savings, 0);
     const simulatedMonthly = actions.filter((item) => item.status === "Simulated").reduce((sum, action) => sum + (recommendations.find((item) => item.id === action.recommendationId)?.savings ?? 0), 0);
+    const resources = await workspaceDataRepository.getResources(workspaceId);
     return res.json({
       currency: "INR",
-      currentMonthlySpend: seedResources.reduce((sum, item) => sum + item.monthlyCost, 0),
+      currentMonthlySpend: resources.reduce((sum, item) => sum + item.monthlyCost, 0),
       potentialMonthlySavings: potentialMonthly,
       projectedAnnualSavings: potentialMonthly * 12,
       simulatedMonthlySavings: simulatedMonthly,
@@ -449,22 +747,52 @@ async function startServer() {
       actions,
     });
   });
-  app.get("/api/reports", requireVerifiedSession, (_req, res) => res.json(store.getReports()));
-  app.post("/api/reports", requireVerifiedSession, (req, res) => {
+  app.get("/api/reports", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoOrManualEnvironment(req, res)) return;
+    return res.json(await workspaceDataRepository.getReports(
+      req.workspace!.id,
+      req.workspace!.environment === "manual" ? "manual" : "demo",
+    ));
+  });
+  app.post("/api/reports", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoOrManualEnvironment(req, res)) return;
     const requestedName = typeof req.body?.name === "string" ? req.body.name.trim() : "";
     if (requestedName.length > 120) return res.status(400).json({ error: "Report name must be 120 characters or fewer." });
-    const recommendations = store.getRecommendations();
+    const workspaceId = req.workspace!.id;
+    if (req.workspace!.environment === "manual") {
+      const analyses = await workspaceDataRepository.getManualAnalyses(workspaceId);
+      const eligible = analyses.filter((analysis) => analysis.status !== "Rejected");
+      const monthlySavings = eligible.reduce((sum, analysis) => sum + (analysis.result.potentialMonthlySavings ?? 0), 0);
+      const report = await workspaceDataRepository.createReport(workspaceId, {
+        name: requestedName || `Manual Analysis Report · ${new Date().toLocaleDateString("en-IN")}`,
+        createdBy: req.user!.email,
+        environmentMode: "manual",
+        summary: {
+          totalResources: analyses.length,
+          totalRecommendations: analyses.length,
+          openRecommendations: analyses.filter((analysis) => analysis.status === "Analyzed" || analysis.status === "Simulated").length,
+          currentMonthlySpend: eligible.reduce((sum, analysis) => sum + (analysis.result.currentMonthlyCost ?? 0), 0),
+          potentialMonthlySavings: monthlySavings,
+          projectedAnnualSavings: monthlySavings * 12,
+          verifiedSavings: 0,
+        },
+      }, req.user!);
+      return res.status(201).json(report);
+    }
+    const recommendations = await workspaceDataRepository.getRecommendations(workspaceId);
     const potentialMonthlySavings = recommendations
       .filter((item) => item.status !== "Rejected")
       .reduce((sum, item) => sum + item.savings, 0);
-    const report = store.createReport({
+    const resources = await workspaceDataRepository.getResources(workspaceId);
+    const report = await workspaceDataRepository.createReport(workspaceId, {
       name: requestedName || `Optimization Report · ${new Date().toLocaleDateString("en-IN")}`,
       createdBy: req.user!.email,
+      environmentMode: "demo",
       summary: {
-        totalResources: store.getResources().length,
+        totalResources: resources.length,
         totalRecommendations: recommendations.length,
         openRecommendations: recommendations.filter((item) => item.status === "Open" || item.status === "Reviewed").length,
-        currentMonthlySpend: store.getResources().reduce((sum, item) => sum + item.monthlyCost, 0),
+        currentMonthlySpend: resources.reduce((sum, item) => sum + item.monthlyCost, 0),
         potentialMonthlySavings,
         projectedAnnualSavings: potentialMonthlySavings * 12,
         verifiedSavings: 0,
@@ -472,11 +800,35 @@ async function startServer() {
     }, req.user!);
     return res.status(201).json(report);
   });
-  app.get("/api/reports/export.csv", requireVerifiedSession, (_req, res) => {
+  app.get("/api/reports/export.csv", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoOrManualEnvironment(req, res)) return;
     const quote = (value: string | number) => `"${String(value).replaceAll('"', '""')}"`;
+    if (req.workspace!.environment === "manual") {
+      const rows = [
+        ["Resource", "Provider", "Region", "Current configuration", "Suggested configuration", "Current monthly cost", "Estimated optimized monthly cost", "Potential monthly savings", "Annual potential savings", "Risk", "Analysis confidence", "Status", "Source"],
+        ...(await workspaceDataRepository.getManualAnalyses(req.workspace!.id)).map((analysis) => [
+          analysis.input.resourceName,
+          analysis.input.provider,
+          analysis.input.region,
+          analysis.input.currentConfiguration,
+          analysis.result.suggestedConfiguration,
+          analysis.result.currentMonthlyCost ?? "",
+          analysis.result.estimatedOptimizedMonthlyCost ?? "",
+          analysis.result.potentialMonthlySavings ?? "",
+          analysis.result.potentialAnnualSavings ?? "",
+          analysis.result.risk,
+          `${analysis.result.analysisConfidence}%`,
+          analysis.status,
+          analysis.result.source,
+        ]),
+      ];
+      res.type("text/csv");
+      res.setHeader("Content-Disposition", 'attachment; filename="smartsize-manual-analysis-report.csv"');
+      return res.send(rows.map((row) => row.map((value) => quote(String(value))).join(",")).join("\r\n"));
+    }
     const rows = [
       ["Resource", "AWS resource ID", "Region", "Environment", "Current configuration", "Recommended configuration", "Monthly savings (INR)", "Risk", "Confidence", "Status"],
-      ...store.getRecommendations().map((item) => {
+      ...(await workspaceDataRepository.getRecommendations(req.workspace!.id)).map((item) => {
         const resource = seedResources.find((candidate) => candidate.id === item.resourceId);
         return [item.resourceName, resource?.instanceId ?? "", resource?.region ?? "", resource?.env ?? "", item.current, item.recommended, item.savings, item.risk, `${item.confidence}%`, item.status];
       }),
@@ -486,6 +838,9 @@ async function startServer() {
     return res.send(rows.map((row) => row.map(quote).join(",")).join("\r\n"));
   });
   app.post("/api/ai/advisor", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) {
+      return res.status(503).json({ code: "AWS_ANALYSIS_NOT_READY", error: "Live AWS analysis is not available yet." });
+    }
     const message = typeof req.body?.message === "string" ? req.body.message.trim() : "";
     if (!message) return res.status(400).json({ error: "Ask a question about your SmartSize data." });
     if (message.length > 1000) return res.status(400).json({ error: "Advisor questions must be 1000 characters or fewer." });
@@ -495,23 +850,27 @@ async function startServer() {
       return res.status(502).json({ error: "The AI Advisor is temporarily unavailable. Your SmartSize data is still available for review." });
     }
   });
-  app.post("/api/recommendations/:id/decision", requireVerifiedSession, (req, res) => {
+  app.post("/api/recommendations/:id/decision", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
     const status = req.body?.status;
     if (status !== "Approved" && status !== "Rejected") return res.status(400).json({ error: "Decision must be Approved or Rejected" });
     if (req.body?.note !== undefined && (typeof req.body.note !== "string" || req.body.note.length > 500)) return res.status(400).json({ error: "Decision note must be a string of 500 characters or fewer" });
-    const current = store.getRecommendations().find((item) => item.id === req.params.id);
+    const workspaceId = req.workspace!.id;
+    const current = (await workspaceDataRepository.getRecommendations(workspaceId)).find((item) => item.id === req.params.id);
     if (!current) return res.status(404).json({ error: "Recommendation not found" });
     if (current.status === "Approved" || current.status === "Rejected") return res.status(409).json({ error: `Recommendation is already ${current.status.toLowerCase()}` });
-    const recommendation = store.decideRecommendation(req.params.id, status, req.user!, req.body?.note);
+    const recommendation = await workspaceDataRepository.updateRecommendation(workspaceId, req.params.id, status, req.user!, req.body?.note);
     return recommendation ? res.json(recommendation) : res.status(404).json({ error: "Recommendation not found" });
   });
-  app.post("/api/recommendations/:id/simulate", requireVerifiedSession, (req, res) => {
-    const recommendation = store.getRecommendations().find((item) => item.id === req.params.id);
+  app.post("/api/recommendations/:id/simulate", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
+    const workspaceId = req.workspace!.id;
+    const recommendation = (await workspaceDataRepository.getRecommendations(workspaceId)).find((item) => item.id === req.params.id);
     if (!recommendation) return res.status(404).json({ error: "Recommendation not found" });
-    const resource = seedResources.find((item) => item.id === recommendation.resourceId);
+    const resource = await workspaceDataRepository.getResource(workspaceId, recommendation.resourceId);
     if (!resource) return res.status(404).json({ error: "Recommendation resource not found" });
     const analysis = analyzeRecommendation(recommendation, resource);
-    store.recordAudit("Simulated rightsizing recommendation", req.user!.name, recommendation.resourceName, "Simulation only", "No AWS resource was modified.");
+    await workspaceDataRepository.recordAudit(workspaceId, req.user!, "SIMULATION_PREVIEWED", recommendation.resourceId, "Simulation only", "No AWS resource was modified.");
     return res.json({
       currentMonthlyCost: recommendation.currentCost,
       estimatedMonthlyCost: recommendation.optimizedCost,
@@ -523,45 +882,49 @@ async function startServer() {
       result: "Simulation only. No AWS resource was modified.",
     });
   });
-  app.post("/api/simulations", requireVerifiedSession, (req, res) => {
+  app.post("/api/simulations", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
     const recommendationIds = req.body?.recommendationIds;
     if (!Array.isArray(recommendationIds) || recommendationIds.some((id: unknown) => typeof id !== "string")) {
       return res.status(400).json({ error: "recommendationIds must be an array of recommendation IDs." });
     }
     if (!recommendationIds.length) return res.status(400).json({ error: "Select at least one recommendation" });
-    const recommendations = store.getRecommendations().filter((item) => recommendationIds.includes(item.id));
+    const workspaceId = req.workspace!.id;
+    const recommendations = (await workspaceDataRepository.getRecommendations(workspaceId)).filter((item) => recommendationIds.includes(item.id));
     if (recommendations.length !== new Set(recommendationIds).size) return res.status(404).json({ error: "One or more recommendations were not found" });
     if (typeof req.body?.name === "string" && req.body.name.trim().length > 120) return res.status(400).json({ error: "Scenario name must be 120 characters or fewer." });
     if (req.body?.name !== undefined && typeof req.body.name !== "string") return res.status(400).json({ error: "Scenario name must be a string." });
     const monthlySavings = recommendations.reduce((total, item) => total + item.savings, 0);
-    const currentSpend = seedResources.reduce((sum, resource) => sum + resource.monthlyCost, 0);
-    const simulation = store.createSimulation({ name: typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim() : `Scenario ${new Date().toLocaleDateString("en-IN")}`, recommendationIds, monthlySavings, optimizedSpend: Math.max(0, currentSpend - monthlySavings), createdBy: req.user!.email }, req.user!);
+    const resources = await workspaceDataRepository.getResources(workspaceId);
+    const currentSpend = resources.reduce((sum, resource) => sum + resource.monthlyCost, 0);
+    const simulation = await workspaceDataRepository.createSimulation(workspaceId, { name: typeof req.body?.name === "string" && req.body.name.trim() ? req.body.name.trim() : `Scenario ${new Date().toLocaleDateString("en-IN")}`, recommendationIds, monthlySavings, optimizedSpend: Math.max(0, currentSpend - monthlySavings), createdBy: req.user!.email }, req.user!);
     return res.status(201).json(simulation);
   });
-  app.get("/api/simulations", requireVerifiedSession, (_req, res) => res.json(store.getSimulations()));
-  app.get("/api/simulations/:id", requireVerifiedSession, (req, res) => {
-    const simulation = store.getSimulations().find((item) => item.id === req.params.id);
+  app.get("/api/simulations", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
+    return res.json(await workspaceDataRepository.getSimulations(req.workspace!.id));
+  });
+  app.get("/api/simulations/:id", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoEnvironment(req, res)) return;
+    const simulation = (await workspaceDataRepository.getSimulations(req.workspace!.id)).find((item) => item.id === req.params.id);
     return simulation ? res.json(simulation) : res.status(404).json({ error: "Simulation not found." });
   });
 
-  app.post("/api/actions/:id/schedule", requireVerifiedSession, (req, res) => {
+  app.post("/api/actions/:id/schedule", requireVerifiedSession, async (req, res) => {
+    if (!requireDemoOrManualEnvironment(req, res)) return;
     const scheduledAt = typeof req.body?.scheduledAt === "string" ? req.body.scheduledAt : "";
     const timestamp = Date.parse(scheduledAt);
     if (!Number.isFinite(timestamp) || timestamp <= Date.now()) return res.status(400).json({ error: "Choose a valid future schedule time." });
-    const action = store.scheduleAction(req.params.id, new Date(timestamp).toISOString(), req.user!);
-    return action ? res.json({ action, message: "Scheduled in the demo workflow. No AWS resources will be modified." }) : res.status(409).json({ error: "Only approved actions can be scheduled." });
+    const action = await workspaceDataRepository.scheduleAction(req.workspace!.id, req.params.id, new Date(timestamp).toISOString(), req.user!);
+    const message = req.workspace!.environment === "manual"
+      ? "Scheduled in the Manual Analysis workflow. No infrastructure will be modified."
+      : "Scheduled in the Demo Environment workflow. No AWS resources will be modified.";
+    return action ? res.json({ action, message }) : res.status(409).json({ error: "Only approved actions can be scheduled." });
   });
-  app.post("/api/actions/:id/simulate-execution", requireVerifiedSession, (req, res) => {
-    const source = getDataSource();
-    if (source.kind !== "demo") return res.status(409).json({ error: "Live AWS execution is not implemented. No resource was modified." });
-    const action = store.simulateAction(req.params.id, req.user!);
-    return action ? res.json({ action, message: "Demo action simulated. No AWS resource was modified." }) : res.status(409).json({ error: "Only scheduled actions can be simulated." });
-  });
-  app.get("/api/aws/status", requireVerifiedSession, (_req, res) => res.json(getDataSource().getStatus()));
-  app.post("/api/aws/sync", requireVerifiedSession, (req, res) => {
-    const result = getDataSource().sync();
-    store.recordAudit("Data source sync requested", req.user!.name, `${result.source.toUpperCase()} connection`, result.status === "ready" ? "Demo data ready" : "Not connected", result.message);
-    return res.json(result);
+  app.post("/api/actions/:id/simulate-execution", requireVerifiedSession, async (req, res) => {
+    if (req.workspace!.environment !== "demo" && req.workspace!.environment !== "manual") return res.status(409).json({ error: "Live AWS execution is not implemented. No resource was modified." });
+    const action = await workspaceDataRepository.simulateAction(req.workspace!.id, req.params.id, req.user!);
+    return action ? res.json({ action, message: "Execution simulation recorded. No infrastructure was modified." }) : res.status(409).json({ error: "Only scheduled actions can be simulated." });
   });
 
   app.use("/api", (_req, res) => res.status(404).json({ error: "API route not found." }));

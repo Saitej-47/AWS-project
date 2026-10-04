@@ -27,7 +27,7 @@ export function CostAnalysisWorkspacePage() {
     {error && <ErrorBox>{error}</ErrorBox>}
     <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3"><Metric label="Current monthly estimate" value={money(currentSpend)} /><Metric label="Potential monthly opportunity" value={money(potentialSavings)} /><Metric label="Annualized opportunity" value={money(potentialSavings * 12)} /></div>
     <section className="card overflow-hidden"><div className="border-b border-slate-100 p-5"><h2 className="font-semibold text-slate-800">Service cost breakdown</h2><p className="mt-1 text-xs text-slate-500">Monthly estimates and opportunities grouped from current resource records.</p></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Service</th><th>Resources</th><th>Current monthly estimate</th><th>Potential opportunity</th></tr></thead><tbody>{serviceRows.map((item) => <tr key={item.service}><td className="font-semibold">{item.service}</td><td>{item.count}</td><td>{money(item.current)}</td><td className="font-semibold text-emerald-700">{money(item.savings)}</td></tr>)}{!resources.length && !error && <tr><td colSpan={4} className="py-8 text-center text-sm text-slate-500">Loading backend cost inputs…</td></tr>}</tbody></table></div></section>
-    <p className="mt-3 text-[10px] text-slate-400">Demo mode: these are synthetic fixture estimates, not actual AWS billing or Cost Explorer data.</p>
+    <p className="mt-3 text-[10px] text-slate-400">Sample environment estimates; these are not actual AWS billing or Cost Explorer data.</p>
   </div>;
 }
 
@@ -45,15 +45,15 @@ export function UtilizationWorkspacePage() {
   } : null;
   return <div className="page-wrap fade-up">
     <Header icon={<Activity size={16} />} title="Utilization" subtitle="Recorded utilization summaries from the configured backend data source; this view does not infer a time series." />
-    <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">Synthetic fixture values only. CloudWatch metrics are not connected, and no historical time-series data is available.</div>
+    <div className="mb-4 text-[11px] text-slate-500">Sample environment values. CloudWatch metrics and historical time-series data are not connected.</div>
     {error && <ErrorBox>{error}</ErrorBox>}
     {averages && <div className="mb-5 grid grid-cols-2 gap-3 md:grid-cols-4"><Metric label="Average CPU" value={`${averages.cpu.toFixed(1)}%`} /><Metric label="Average memory" value={`${averages.memory.toFixed(1)}%`} /><Metric label="Average network" value={`${averages.network.toFixed(1)}%`} /><Metric label="Average storage" value={`${averages.storage.toFixed(1)}%`} /></div>}
-    <section className="card overflow-hidden"><div className="border-b border-slate-100 p-5"><h2 className="font-semibold text-slate-800">Resource utilization summaries</h2><p className="mt-1 text-xs text-slate-500">Average and recorded peak fixture values. No interpolated data points are displayed.</p></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Resource</th><th>Service</th><th>Average CPU</th><th>Peak CPU</th><th>Average memory</th><th>Peak memory</th><th>Network</th><th>Storage</th></tr></thead><tbody>{resources.map((item) => <tr key={item.id}><td className="font-semibold text-slate-800">{item.name}</td><td>{item.service}</td><td>{item.cpu}%</td><td>{item.peakCpu}%</td><td>{item.memory}%</td><td>{item.peakMemory}%</td><td>{item.network}%</td><td>{item.storage}%</td></tr>)}{!resources.length && !error && <tr><td colSpan={8} className="py-8 text-center text-sm text-slate-500">Loading backend utilization summaries…</td></tr>}</tbody></table></div></section>
+    <section className="card overflow-hidden"><div className="border-b border-slate-100 p-5"><h2 className="font-semibold text-slate-800">Resource utilization summaries</h2><p className="mt-1 text-xs text-slate-500">Recorded average and peak values; no time-series values are interpolated.</p></div><div className="table-wrap"><table className="data-table"><thead><tr><th>Resource</th><th>Service</th><th>Average CPU</th><th>Peak CPU</th><th>Average memory</th><th>Peak memory</th><th>Network</th><th>Storage</th></tr></thead><tbody>{resources.map((item) => <tr key={item.id}><td className="font-semibold text-slate-800">{item.name}</td><td>{item.service}</td><td>{item.cpu}%</td><td>{item.peakCpu}%</td><td>{item.memory}%</td><td>{item.peakMemory}%</td><td>{item.network}%</td><td>{item.storage}%</td></tr>)}{!resources.length && !error && <tr><td colSpan={8} className="py-8 text-center text-sm text-slate-500">Loading backend utilization summaries…</td></tr>}</tbody></table></div></section>
   </div>;
 }
 
 function Header({ icon, title, subtitle }: { icon: React.ReactNode; title: string; subtitle: string }) {
-  return <div className="mb-6 flex items-start gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-50 text-orange-600">{icon}</span><div><div className="eyebrow">SmartSize · Demo data</div><h1 className="page-title mt-1">{title}</h1><p className="page-subtitle mt-1">{subtitle}</p></div></div>;
+  return <div className="mb-6 flex items-start gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-lg bg-orange-50 text-orange-600">{icon}</span><div><div className="eyebrow">SmartSize · Cloud optimization</div><h1 className="page-title mt-1">{title}</h1><p className="page-subtitle mt-1">{subtitle}</p></div></div>;
 }
 
 function Metric({ label, value }: { label: string; value: string }) {

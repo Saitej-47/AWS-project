@@ -70,13 +70,13 @@ export function RecommendationWorkflowPage({
   return <div className="page-wrap fade-up">
     <button className="breadcrumb-link mb-5 flex items-center gap-1 text-xs" onClick={() => navigate('/recommendations')}><ArrowLeft size={13} /> Recommendations</button>
     <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
-      <div><div className="eyebrow mb-2">Demo evidence · {resource.service} · {resource.region} · {resource.env}</div><h1 className="page-title">Recommendation review</h1><p className="page-subtitle mt-2">{resource.name} · {resource.instanceId}</p></div>
+      <div><div className="eyebrow mb-2">Sample recommendation · {resource.service} · {resource.region} · {resource.env}</div><h1 className="page-title">{resource.name}</h1><p className="page-subtitle mt-2">Review the proposed configuration, cost estimate, and performance evidence.</p></div>
       <span className="status-pill status-review">{recommendation.status}</span>
     </div>
     <div className="mb-5 grid grid-cols-3 gap-4 grid-cols-1 md:grid-cols-3">
       <section className="card border-l-4 border-l-slate-400 p-5"><div className="eyebrow">Current configuration</div><div className="mt-3 font-mono text-xl font-semibold text-slate-800">{recommendation.current}</div><div className="mt-2 text-xs text-slate-500">Estimated monthly cost · {money(recommendation.currentCost)}</div></section>
       <div className="hidden items-center justify-center text-orange-500 md:flex"><ArrowRight size={26} /></div>
-      <section className="card border-l-4 border-l-orange-400 p-5"><div className="eyebrow">AWS recommendation fixture</div><div className="mt-3 font-mono text-xl font-semibold text-slate-800">{recommendation.recommended}</div><div className="mt-2 text-xs text-slate-500">Estimated monthly cost · {money(recommendation.optimizedCost)}</div></section>
+      <section className="card border-l-4 border-l-orange-400 p-5"><div className="eyebrow">Proposed configuration · Sample</div><div className="mt-3 font-mono text-xl font-semibold text-slate-800">{recommendation.recommended}</div><div className="mt-2 text-xs text-slate-500">Estimated monthly cost · {money(recommendation.optimizedCost)}</div></section>
       <section className="card border-l-4 border-l-emerald-500 p-5"><div className="eyebrow">Estimated opportunity</div><div className="mt-3 font-mono text-xl font-semibold text-emerald-700">{money(recommendation.savings)} / month</div><div className="mt-2 text-xs text-slate-500">{money(analysis.estimated_savings.annual)} annualized · {Math.round(recommendation.savings / Math.max(1, recommendation.currentCost) * 100)}% lower estimate</div></section>
     </div>
     <div className="mb-5 grid grid-cols-3 gap-5 grid-cols-1 lg:grid-cols-3">

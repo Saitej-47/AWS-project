@@ -33,7 +33,7 @@ export function analyzeRecommendation(
   const environmentNote = resource.env === "Production"
     ? " Production environment: human review is required before any action."
     : "";
-  const explanation = `Observed demo metrics show average CPU at ${resource.cpu}% (peak ${resource.peakCpu}%) and average memory at ${resource.memory}% (peak ${resource.peakMemory}%). The supplied recommendation proposes ${recommendation.current} to ${recommendation.recommended}, with estimated monthly savings of ${recommendation.savings.toLocaleString()} and ${recommendation.risk.toLowerCase()} performance risk.${environmentNote}`;
+  const explanation = `Sample environment metrics show average CPU at ${resource.cpu}% (peak ${resource.peakCpu}%) and average memory at ${resource.memory}% (peak ${resource.peakMemory}%). The sample recommendation proposes ${recommendation.current} to ${recommendation.recommended}, with illustrative monthly savings of ${recommendation.savings.toLocaleString()} and ${recommendation.risk.toLowerCase()} performance risk.${environmentNote}`;
 
   return {
     recommendation_priority: recommendationPriority,
@@ -44,6 +44,6 @@ export function analyzeRecommendation(
     recommended_action: resource.env === "Production" ? "Require approval" : "Ready for review",
     explanation,
     score_reasons: scoreReasons,
-    recommendation_source: "Synthetic demo fixture; AWS Compute Optimizer is not connected",
+    recommendation_source: "Sample recommendation · Illustrative environment · AWS not connected",
   };
 }

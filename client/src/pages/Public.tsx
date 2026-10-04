@@ -14,7 +14,7 @@ export function LandingPage({ navigate, toast, onEnterDemo }: LandingProps) {
     try {
       await onEnterDemo();
     } catch (error) {
-      toast('Demo workspace unavailable', error instanceof Error ? error.message : 'The demo session could not be started.');
+      toast('Demo environment unavailable', error instanceof Error ? error.message : 'The sample environment could not be opened.');
     }
   };
   return (
@@ -115,7 +115,7 @@ export function LandingPage({ navigate, toast, onEnterDemo }: LandingProps) {
             <div className="proof-byline"><span className="proof-line" /> <span>Built for the people who own infrastructure outcomes</span></div>
           </div>
           <div className="proof-stats">
-            <div><strong>24</strong><span>synthetic resources</span></div>
+            <div><strong>24</strong><span>sample resources</span></div>
             <div><strong>₹8.35L</strong><span>annualized demo opportunity</span></div>
             <div><strong>85%</strong><span>average demo confidence</span></div>
           </div>
@@ -125,7 +125,7 @@ export function LandingPage({ navigate, toast, onEnterDemo }: LandingProps) {
           <div className="security-copy">
             <div className="landing-kicker muted"><LockKeyhole size={14} /> Trust is part of the interface</div>
             <h2>Confidence, by design.</h2>
-            <p>SmartSize keeps a clear audit trail and separates synthetic demo data from live AWS connectivity.</p>
+            <p>SmartSize keeps a clear audit trail and separates the sample environment from live AWS connectivity.</p>
             <div className="security-list">
               <div><Check size={15} /> Demo-first, while clearly distinguishing simulated and live environment states</div>
               <div><Check size={15} /> Least-privilege access posture for future AWS integrations</div>
@@ -147,8 +147,8 @@ export function LandingPage({ navigate, toast, onEnterDemo }: LandingProps) {
           <div className="final-ornament" />
           <div className="landing-kicker"><span className="pulse-dot" /> The next conversation starts here</div>
           <h2>Make every cloud decision<br /><em>worth explaining.</em></h2>
-          <p>Explore a realistic synthetic dataset and demonstrate the controlled workflow — no AWS credentials required.</p>
-          <button className="landing-cta" onClick={() => void enterDemo()}>Enter the workspace <ArrowRight size={16} /></button>
+          <p>Explore SmartSize using a sample cloud environment. No AWS account or credentials are required.</p>
+          <button className="landing-cta" onClick={() => void enterDemo()}>Explore Demo Environment <ArrowRight size={16} /></button>
         </section>
       </main>
 
@@ -301,7 +301,7 @@ export function RegisterPage({ navigate, toast }: SignInProps) {
         toast('Account created', response.developmentToken ? `Development verification token: ${response.developmentToken}` : 'Check your email to activate the SmartSize workspace.', 'success');
         navigate('/verify-email');
       } else {
-        toast('Account created', 'Your demo workspace is ready. Sign in to continue.', 'success');
+        toast('Account created', 'Sign in to initialize your workspace and choose an environment.', 'success');
         navigate('/signin');
       }
     } catch (error) {

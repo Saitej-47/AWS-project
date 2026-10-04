@@ -17,6 +17,8 @@ type UserRow = RowDataPacket & {
   reset_token: string | null;
   reset_token_expires_at: Date | string | null;
   session_version: number;
+  workspace_name: string | null;
+  environment_mode: User["environmentMode"] | null;
   created_at: Date | string;
 };
 
@@ -40,6 +42,8 @@ function fromRow(row: UserRow): User {
     resetToken: row.reset_token,
     resetTokenExpiresAt: asIsoString(row.reset_token_expires_at),
     sessionVersion: row.session_version,
+    workspaceName: row.workspace_name ?? undefined,
+    environmentMode: row.environment_mode ?? undefined,
     createdAt: asIsoString(row.created_at)!,
   };
 }
@@ -47,7 +51,7 @@ function fromRow(row: UserRow): User {
 const columns = `
   id, email, name, avatar, provider, role, password_hash, email_verified,
   verification_token, verification_token_expires_at, reset_token,
-  reset_token_expires_at, session_version, created_at
+  reset_token_expires_at, session_version, workspace_name, environment_mode, created_at
 `;
 
 export const userRepository = {
@@ -104,8 +108,8 @@ export const userRepository = {
         `INSERT INTO smartsize_users (
           id, email, name, avatar, provider, role, password_hash, email_verified,
           verification_token, verification_token_expires_at, reset_token,
-          reset_token_expires_at, session_version, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          reset_token_expires_at, session_version, workspace_name, environment_mode, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           user.id,
           user.email.toLowerCase(),
@@ -120,6 +124,9 @@ export const userRepository = {
           user.resetToken ?? null,
           user.resetTokenExpiresAt ? new Date(user.resetTokenExpiresAt) : null,
           user.sessionVersion ?? 0,
+          user.workspaceName ?? null,
+          user.environmentMode ?? null,
+          new Date(user.createdAt),
           new Date(user.createdAt),
         ],
       );
@@ -155,6 +162,8 @@ export const userRepository = {
       resetToken: "reset_token",
       resetTokenExpiresAt: "reset_token_expires_at",
       sessionVersion: "session_version",
+      workspaceName: "workspace_name",
+      environmentMode: "environment_mode",
     };
     const assignments: string[] = [];
     const values: Array<string | number | boolean | Date | null> = [];
@@ -172,6 +181,7 @@ export const userRepository = {
     }
     if (!assignments.length) return this.getById(id);
     values.push(id);
+    assignments.push("updated_at = UTC_TIMESTAMP(3)");
     await pool.execute(`UPDATE smartsize_users SET ${assignments.join(", ")} WHERE id = ?`, values);
     return this.getById(id);
   },

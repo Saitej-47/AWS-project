@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Link, Route, Switch, useLocation } from 'wouter';
 import {
-  Activity as ActivityIcon, ArrowDownRight, ArrowLeft, ArrowRight, BarChart3, Bell, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Cloud, CloudCog, CloudLightning, Command, Download, FileCheck2, FileText, Filter, FlaskConical, Gauge, Globe2, Info, LayoutDashboard, ListChecks, LockKeyhole, LogOut, Menu, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Search, Server, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Table2, TrendingDown, TrendingUp, X, Zap
+  Activity as ActivityIcon, ArrowDownRight, ArrowLeft, ArrowRight, BarChart3, Bell, Check, CheckCircle2, ChevronDown, ChevronRight, CircleHelp, Cloud, CloudCog, CloudLightning, Command, Database, Download, FileCheck2, FileText, Filter, FlaskConical, Gauge, Globe2, Info, LayoutDashboard, ListChecks, LockKeyhole, LogOut, Menu, MoreHorizontal, PanelLeftClose, PanelLeftOpen, Plus, RefreshCw, Search, Server, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Table2, TrendingDown, TrendingUp, X, Zap
 } from 'lucide-react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import {
@@ -16,8 +16,11 @@ import { RecommendationWorkflowPage } from './pages/RecommendationWorkflowPage';
 import { ReportsWorkspacePage } from './pages/ReportsPage';
 import { RecommendationsWorkspacePage, ResourceDetailWorkspacePage, ResourcesWorkspacePage, SimulatorWorkspacePage } from './pages/InventoryPages';
 import { CostAnalysisWorkspacePage, UtilizationWorkspacePage } from './pages/InsightsPages';
+import { WorkspaceOnboardingPage } from './pages/WorkspaceOnboardingPage';
+import { WorkspaceSettingsPage } from './pages/WorkspaceSettingsPage';
+import { ManualAnalysisPage } from './pages/ManualAnalysisPage';
 
-const iconMap = { LayoutDashboard, Server, Sparkles, BarChart3, Activity: ActivityIcon, FlaskConical, FileText, ListChecks, Settings, TrendingUp, ShieldCheck, Cloud } as const;
+const iconMap = { LayoutDashboard, Server, Sparkles, BarChart3, Activity: ActivityIcon, FlaskConical, FileText, ListChecks, Settings, TrendingUp, ShieldCheck, Cloud, Database } as const;
 
 type ToastMessage = { id: number; title: string; body: string; tone?: 'success' | 'info' };
 
@@ -79,8 +82,14 @@ function App() {
       navigate('/verify-email');
       return;
     }
+    if (sessionUser && sessionUser.emailVerified && sessionUser.environmentMode === null && location !== '/onboarding') {
+      navigate('/onboarding');
+      return;
+    }
     if (sessionUser && ['/', '/signin', '/register'].includes(location)) {
-      navigate('/overview');
+      navigate(sessionUser.environmentMode === 'demo' || sessionUser.environmentMode === 'aws'
+        ? '/overview'
+        : sessionUser.environmentMode === 'manual' ? '/manual' : '/onboarding');
     }
   }, [authReady, isDemoRoute, isPublic, location, navigate, sessionUser]);
 
@@ -97,6 +106,7 @@ function App() {
 
   useEffect(() => {
     if (isPublic || !sessionUser || !sessionUser.emailVerified) return;
+    if (sessionUser.environmentMode !== 'demo') return;
     api.dashboard().then(({ recommendations: liveRecommendations }) => {
       liveRecommendations.forEach((live) => { const local = recommendations.find((item) => item.id === live.id); if (local) local.status = live.status as Recommendation['status']; });
       setDataVersion((version) => version + 1);
@@ -127,6 +137,28 @@ function App() {
     catch (error) { toast('Scenario could not be saved', error instanceof Error ? error.message : 'The simulation service is unavailable.'); }
   };
 
+  const handleExploreDemo = async () => {
+    if (!sessionUser) return;
+    try {
+      const { user } = await api.updateWorkspace({ environmentMode: 'demo' });
+      setSessionUser(user);
+      navigate('/overview');
+    } catch (error) {
+      toast('Could not open demo environment', error instanceof Error ? error.message : 'Workspace preferences could not be saved.');
+    }
+  };
+
+  const handleChooseManual = async () => {
+    if (!sessionUser) return;
+    try {
+      const { user } = await api.updateWorkspace({ environmentMode: 'manual' });
+      setSessionUser(user);
+      navigate('/manual');
+    } catch (error) {
+      toast('Could not open Manual Analysis', error instanceof Error ? error.message : 'Workspace preferences could not be saved.');
+    }
+  };
+
   if (!authReady) {
     return <div className="page-wrap flex min-h-screen items-center justify-center"><div className="card p-6 text-center"><div className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-orange-100 text-orange-600"><CloudCog size={18} /></div><div className="text-sm font-semibold text-slate-700">Loading SmartSize…</div><div className="mt-1 text-xs text-slate-500">Checking your authenticated session.</div></div></div>;
   }
@@ -151,6 +183,10 @@ function App() {
     return <VerificationRequiredPage user={sessionUser} navigate={navigate} toast={toast} />;
   }
 
+  if (sessionUser && (sessionUser.environmentMode === null || location === '/onboarding')) {
+    return <WorkspaceOnboardingPage user={sessionUser} onUserUpdated={setSessionUser} navigate={navigate} />;
+  }
+
   return (
     <div className="app-shell flex min-h-screen">
       <Sidebar user={sessionUser} compact={sidebarCompact} open={sidebarOpen} currentPath={location} onNavigate={() => setSidebarOpen(false)} onToggle={() => setSidebarCompact((value) => !value)} onLogout={async () => {
@@ -164,10 +200,11 @@ function App() {
       }} onAdvisor={() => setAdvisorOpen(true)} />
       {sidebarOpen && <button aria-label="Close navigation" className="fixed inset-0 z-20 bg-slate-950/30 lg:hidden" onClick={() => setSidebarOpen(false)} />}
       <div className="main-content flex min-w-0 flex-1 flex-col">
-        <TopBar user={sessionUser} currentPage={currentPage} searchTerm={searchTerm} setSearchTerm={setSearchTerm} onMenu={() => setSidebarOpen(true)} onSearch={() => setSearchOpen(true)} environmentOpen={environmentOpen} setEnvironmentOpen={setEnvironmentOpen} toast={toast} />
+        <TopBar user={sessionUser} currentPage={currentPage} searchTerm={searchTerm} setSearchTerm={setSearchTerm} onMenu={() => setSidebarOpen(true)} onSearch={() => setSearchOpen(true)} environmentOpen={environmentOpen} setEnvironmentOpen={setEnvironmentOpen} onChooseDemo={() => void handleExploreDemo()} onChooseManual={() => void handleChooseManual()} onConnectAws={() => navigate('/aws')} toast={toast} />
         <main className="min-w-0 flex-1">
           <Switch>
             <Route path="/overview" component={() => <OverviewDashboardPage navigate={navigate} />} />
+            <Route path="/manual" component={() => <ManualAnalysisPage toast={toast} />} />
             <Route path="/resources" component={() => <ResourcesWorkspacePage navigate={navigate} />} />
             <Route path="/resources/:id" component={(params) => <ResourceDetailWorkspacePage id={params.params.id} navigate={navigate} />} />
             <Route path="/recommendations" component={() => <RecommendationsWorkspacePage navigate={navigate} />} />
@@ -181,7 +218,7 @@ function App() {
             <Route path="/simulator" component={() => <SimulatorWorkspacePage onSave={handleSaveSimulation} />} />
             <Route path="/reports" component={() => <ReportsWorkspacePage toast={toast} />} />
             <Route path="/activity" component={() => <AuditTrailPage />} />
-            <Route path="/settings" component={() => <SettingsPage toast={toast} />} />
+            <Route path="/settings" component={() => sessionUser ? <WorkspaceSettingsPage user={sessionUser} onUserUpdated={setSessionUser} toast={toast} /> : null} />
             <Route component={() => <NotFound navigate={navigate} />} />
           </Switch>
         </main>
@@ -195,24 +232,31 @@ function App() {
 }
 
 function Sidebar({ user, compact, open, currentPath, onNavigate, onToggle, onLogout, onAdvisor }: { user: SessionUser | null; compact: boolean; open: boolean; currentPath: string; onNavigate: () => void; onToggle: () => void; onLogout: () => void | Promise<void>; onAdvisor: () => void }) {
+  const manualNavigation = new Set(['/overview', '/manual', '/actions', '/savings', '/reports', '/activity', '/aws', '/settings']);
+  const primaryItems = user?.environmentMode === 'manual'
+    ? navItems.filter((item) => ['/overview', '/manual'].includes(item.path))
+    : navItems.slice(0, 6);
+  const secondaryItems = user?.environmentMode === 'manual'
+    ? navItems.filter((item) => manualNavigation.has(item.path) && !['/overview', '/manual'].includes(item.path))
+    : navItems.slice(6);
   return (
     <aside className={`sidebar flex shrink-0 flex-col ${compact ? 'compact' : ''} ${open ? 'open' : ''}`}>
       <div className="brand flex items-center gap-3 px-5 py-5">
         <Link href="/overview" className="brand-mark shrink-0" aria-label="SmartSize overview"><CloudCog size={18} strokeWidth={2.4} /></Link>
         <div className="brand-copy min-w-0">
           <div className="font-semibold tracking-tight text-white">Smart<span className="text-[#ffad32]">Size</span></div>
-          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-slate-500"><span className="inline-block h-1.5 w-1.5 rounded-full bg-[#ff9900]" /> Demo Dataset</div>
+          <div className="mt-0.5 flex items-center gap-1.5 text-[10px] text-slate-500"><span className="inline-block h-1.5 w-1.5 rounded-full bg-[#ff9900]" /> {user?.workspaceName ?? "My Workspace"}</div>
         </div>
       </div>
       <div className="mx-5 mb-5 flex items-center gap-2 rounded-lg border border-[#2a3544] bg-[#151e2a] px-3 py-2.5">
         <div className="flex h-7 w-7 items-center justify-center rounded-md bg-[#253345] text-[#ffb448]"><Cloud size={14} /></div>
-        <div className="sidebar-foot-copy min-w-0"><div className="text-[10px] uppercase tracking-[.12em] text-slate-500">Data source</div><div className="truncate text-xs font-semibold text-slate-200">Synthetic demo · No AWS writes</div></div>
+        <div className="sidebar-foot-copy min-w-0"><div className="text-[10px] uppercase tracking-[.12em] text-slate-500">Environment</div><div className="truncate text-xs font-semibold text-slate-200">{user?.environmentMode === 'manual' ? 'Manual Analysis' : user?.environmentMode === 'aws' ? 'AWS Environment' : 'Demo Environment'}</div></div>
       </div>
       <nav className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
-        <div className="side-section-label">Workspace</div>
-        {navItems.slice(0, 6).map((item) => <NavItem key={item.path} item={item} active={currentPath === item.path} onNavigate={onNavigate} />)}
-        <div className="side-section-label">Insights & control</div>
-        {navItems.slice(6).map((item) => <NavItem key={item.path} item={item} active={currentPath === item.path} onNavigate={onNavigate} />)}
+        <div className="side-section-label">{user?.environmentMode === 'manual' ? 'Analysis' : 'Workspace'}</div>
+        {primaryItems.map((item) => <NavItem key={item.path} item={item} active={currentPath === item.path} onNavigate={onNavigate} />)}
+        <div className="side-section-label">{user?.environmentMode === 'manual' ? 'Workspace & control' : 'Insights & control'}</div>
+        {secondaryItems.map((item) => <NavItem key={item.path} item={item} active={currentPath === item.path} onNavigate={onNavigate} />)}
         <button onClick={onAdvisor} className="mt-5 w-full rounded-xl border border-[#2b3b4d] bg-gradient-to-br from-[#1d2d3d] to-[#152231] p-3.5 text-left transition hover:border-[#ffae35]/50 sidebar-foot-copy" aria-label="Open Cloud Advisor">
           <div className="mb-2 flex items-center justify-between"><div className="flex h-7 w-7 items-center justify-center rounded-lg bg-[#2b3d4e] text-[#ffae35]"><Sparkles size={14} /></div><span className="rounded-full bg-[#2b3d4e] px-2 py-0.5 text-[9px] font-bold text-[#ffb448]">BETA</span></div>
           <div className="text-xs font-semibold text-white">Ask Cloud Advisor</div><div className="mt-1 text-[10px] leading-relaxed text-slate-400">Explain a recommendation with AI-powered context.</div>
@@ -233,19 +277,19 @@ function NavItem({ item, active, onNavigate }: { item: (typeof navItems)[number]
   return <Link href={item.path} onClick={onNavigate} className={`nav-link ${active ? 'active' : ''}`}><Icon size={16} strokeWidth={active ? 2.3 : 1.8} /><span className="nav-copy flex-1">{item.label}</span>{count && <span className="nav-count">{count}</span>}</Link>;
 }
 
-function TopBar({ user, currentPage, searchTerm, setSearchTerm, onMenu, onSearch, environmentOpen, setEnvironmentOpen, toast }: { user: SessionUser | null; currentPage: string; searchTerm: string; setSearchTerm: (value: string) => void; onMenu: () => void; onSearch: () => void; environmentOpen: boolean; setEnvironmentOpen: (value: boolean) => void; toast: (title: string, body: string, tone?: ToastMessage['tone']) => void }) {
+function TopBar({ user, currentPage, searchTerm, setSearchTerm, onMenu, onSearch, environmentOpen, setEnvironmentOpen, onChooseDemo, onChooseManual, onConnectAws, toast }: { user: SessionUser | null; currentPage: string; searchTerm: string; setSearchTerm: (value: string) => void; onMenu: () => void; onSearch: () => void; environmentOpen: boolean; setEnvironmentOpen: (value: boolean) => void; onChooseDemo: () => void; onChooseManual: () => void; onConnectAws: () => void; toast: (title: string, body: string, tone?: ToastMessage['tone']) => void }) {
   return <header className="topbar sticky top-0 z-10 flex items-center gap-4 px-4 sm:px-6 lg:px-8">
     <button className="mobile-top rounded-md p-1.5 text-slate-600 hover:bg-slate-100" onClick={onMenu} aria-label="Open navigation"><Menu size={20} /></button>
-    <div className="hidden shrink-0 items-center gap-2 text-xs text-slate-400 md:flex"><span className="font-semibold text-slate-700">{currentPage}</span><ChevronRight size={13} /><span>Demo workspace</span></div>
+    <div className="hidden shrink-0 items-center gap-2 text-xs text-slate-400 md:flex"><span className="font-semibold text-slate-700">{currentPage}</span><ChevronRight size={13} /><span>{user?.workspaceName ?? 'My Workspace'}</span></div>
     <div className="top-search relative ml-auto hidden w-full max-w-[330px] md:block"><Search className="pointer-events-none absolute left-3 top-2.5 text-slate-400" size={15} /><input value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} onFocus={onSearch} onKeyDown={(e) => { if (e.key === 'Enter') onSearch(); }} className="input pl-9 pr-12" placeholder="Search resources, recommendations..." /><div className="absolute right-2 top-2 flex items-center gap-1 rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold text-slate-400"><Command size={10} /> K</div></div>
-    <div className="relative"><button onClick={() => setEnvironmentOpen(!environmentOpen)} className="hidden items-center gap-2 rounded-lg border border-[#dfe4eb] bg-white px-3 py-2 text-left sm:flex"><span className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_0_3px_rgba(16,185,129,.12)]" /><span className="text-xs font-semibold text-slate-700">Demo Dataset</span><ChevronDown size={14} className="text-slate-400" /></button>{environmentOpen && <EnvironmentMenu close={() => setEnvironmentOpen(false)} toast={toast} />}</div>
+    <div className="relative"><button onClick={() => setEnvironmentOpen(!environmentOpen)} className="hidden items-center gap-2 rounded-lg border border-[#dfe4eb] bg-white px-3 py-2 text-left sm:flex"><span className="h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_0_3px_rgba(59,130,246,.12)]" /><span><span className="block text-[9px] uppercase tracking-wider text-slate-400">Environment</span><span className="block text-xs font-semibold text-slate-700">{user?.environmentMode === 'manual' ? 'Manual Analysis' : user?.environmentMode === 'aws' ? 'AWS Environment' : 'Demo Environment'}</span></span><ChevronDown size={14} className="text-slate-400" /></button>{environmentOpen && <EnvironmentMenu close={() => setEnvironmentOpen(false)} onChooseDemo={onChooseDemo} onChooseManual={onChooseManual} onConnectAws={onConnectAws} toast={toast} />}</div>
     <button onClick={() => toast('No new alerts', 'All monitored signals are within the current demo policy.')} className="relative rounded-lg p-2 text-slate-500 hover:bg-slate-100" aria-label="Notifications"><Bell size={18} /><span className="absolute right-1.5 top-1.5 h-1.5 w-1.5 rounded-full bg-[#ff9900]" /></button>
     <button onClick={() => toast('Profile menu', 'Account settings are available in the Settings area.')} className="flex items-center gap-2 rounded-lg p-1.5 pr-0 hover:bg-slate-100"><span className="flex h-8 w-8 items-center justify-center rounded-full bg-[#f0a02a] text-[10px] font-bold text-[#261a09]">{user?.name.split(/\s+/).map((part) => part[0]).join('').slice(0, 2).toUpperCase() ?? 'SS'}</span><span className="hidden text-left sm:block"><span className="block text-xs font-bold text-slate-700">{user?.name ?? 'SmartSize Demo'}</span><span className="block text-[10px] text-slate-400">{user?.role ?? 'Platform Admin'}</span></span><ChevronDown size={14} className="hidden text-slate-400 sm:block" /></button>
   </header>;
 }
 
-function EnvironmentMenu({ close, toast }: { close: () => void; toast: (title: string, body: string, tone?: ToastMessage['tone']) => void }) {
-  return <div className="absolute right-0 top-12 z-30 w-60 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl"><div className="px-3 py-2 text-[10px] font-bold uppercase tracking-[.12em] text-slate-400">Workspace environment</div><button className="flex w-full items-center gap-2 rounded-lg bg-orange-50 px-3 py-2.5 text-left"><span className="h-2 w-2 rounded-full bg-emerald-500" /><span className="flex-1 text-xs font-semibold text-slate-700">Demo Environment</span><Check size={14} className="text-orange-500" /></button><button onClick={() => { close(); toast('Live AWS mode unavailable', 'Connect a backend integration to enable live account data.'); }} className="mt-1 flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left hover:bg-slate-50"><span className="h-2 w-2 rounded-full bg-slate-300" /><span className="flex-1 text-xs text-slate-500">Live AWS Environment</span><span className="rounded bg-slate-100 px-1.5 py-0.5 text-[9px] font-bold text-slate-400">SOON</span></button></div>;
+function EnvironmentMenu({ close, onChooseDemo, onChooseManual, onConnectAws, toast }: { close: () => void; onChooseDemo: () => void; onChooseManual: () => void; onConnectAws: () => void; toast: (title: string, body: string, tone?: ToastMessage['tone']) => void }) {
+  return <div className="absolute right-0 top-12 z-30 w-72 overflow-hidden rounded-xl border border-slate-200 bg-white p-1.5 shadow-xl"><div className="px-3 py-2 text-[10px] font-bold uppercase tracking-[.12em] text-slate-400">Select environment</div><button onClick={() => { close(); onChooseDemo(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left hover:bg-orange-50"><span className="h-2 w-2 rounded-full bg-blue-500" /><span className="flex-1"><span className="block text-xs font-semibold text-slate-700">Demo Environment</span><span className="mt-0.5 block text-[10px] text-slate-500">Illustrative infrastructure and simulated workflow</span></span></button><button onClick={() => { close(); onChooseManual(); }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2.5 text-left hover:bg-blue-50"><Database size={14} className="text-blue-600" /><span className="flex-1"><span className="block text-xs font-semibold text-slate-700">Manual Analysis</span><span className="mt-0.5 block text-[10px] text-slate-500">Enter infrastructure and receive estimates</span></span></button><div className="mt-1 flex items-center gap-2 rounded-lg px-3 py-2.5"><span className="h-2 w-2 rounded-full bg-slate-300" /><span className="flex-1"><span className="block text-xs font-semibold text-slate-500">AWS Environment</span><span className="mt-0.5 block text-[10px] text-slate-400">Backend identity and service health verification</span></span></div><button onClick={() => { close(); onConnectAws(); toast('AWS connection settings', 'AWS identity and permissions are verified by the backend.'); }} className="ml-7 mb-1 rounded-md px-2 py-1 text-[10px] font-semibold text-blue-700 hover:bg-blue-50">Connection settings <ArrowRight size={11} className="ml-1 inline" /></button></div>;
 }
 
 function PageHeader({ eyebrow, title, subtitle, actions, children }: { eyebrow?: string; title: string; subtitle?: string; actions?: ReactNode; children?: ReactNode }) {

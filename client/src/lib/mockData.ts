@@ -105,6 +105,7 @@ export const totalSavings = 69570;
 export const annualSavings = 834840;
 export const navItems = [
   { label: 'Overview', path: '/overview', icon: 'LayoutDashboard' },
+  { label: 'Manual Analysis', path: '/manual', icon: 'Database' },
   { label: 'Resources', path: '/resources', icon: 'Server' },
   { label: 'Recommendations', path: '/recommendations', icon: 'Sparkles', count: recommendations.length },
   { label: 'Cost Analysis', path: '/cost-analysis', icon: 'BarChart3' },
